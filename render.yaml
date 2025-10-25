@@ -13,11 +13,13 @@ services:
       name: template-storage
       mountPath: /opt/render/project/src/server/data
       sizeGB: 1
-staticSites:
-  - name: jira-dashboard-ui
+  - type: web
+    name: jira-dashboard-ui
+    env: node
     rootDir: .
+    plan: free
     buildCommand: npm install && npm run build
-    publishPath: dist
+    startCommand: npx vite preview --host 0.0.0.0 --port 10000
     envVars:
       - key: NODE_VERSION
         value: 22.11.0
