@@ -140,7 +140,7 @@ const vatSettingsToLegacyMode = (settings: VatSettings): Contract['vatMode'] => 
   return 'vat_20';
 };
 
-const formatContractDate = (value?: string | null): string | null => {
+const normalizeIsoDate = (value?: string | null): string | null => {
   if (!value) {
     return null;
   }
@@ -148,14 +148,33 @@ const formatContractDate = (value?: string | null): string | null => {
   if (!trimmed) {
     return null;
   }
-  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
-  if (isoMatch) {
-    const [, year, month, day] = isoMatch;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    return trimmed;
+  }
+  return parsed.toISOString().slice(0, 10);
+};
+
+const toDateInputValue = (value?: string | null): string => {
+  const normalized = normalizeIsoDate(value);
+  return normalized && /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : '';
+};
+
+const formatContractDate = (value?: string | null): string | null => {
+  const normalized = normalizeIsoDate(value);
+  if (!normalized) {
+    return null;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    const [year, month, day] = normalized.split('-');
     return `${day}.${month}.${year}`;
   }
-  const date = new Date(trimmed);
+  const date = new Date(normalized);
   if (Number.isNaN(date.getTime())) {
-    return trimmed;
+    return normalized;
   }
   return date.toLocaleDateString('ru-RU');
 };
@@ -1485,6 +1504,8 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
             allowedTemplateIds: [],
           };
 
+      base.requireNpdReceipt = base.performerType === 'selfemployed';
+      base.contractDate = normalizeIsoDate(base.contractDate);
       const normalizedVat = normalizeVatSettings(base.vatSettings);
       const vatEligible = base.performerType === 'ip' || base.performerType === 'company';
       base.vatSettings = vatEligible ? normalizedVat : { ...DEFAULT_VAT_SETTINGS };
@@ -1518,9 +1539,11 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
     const handleSave = async () => {
       try {
         const normalizedVat = normalizeVatSettings(form.vatSettings);
+        const normalizedContractDate = normalizeIsoDate(form.contractDate);
         const prepared = resolveContractTemplates(
           {
             ...form,
+            contractDate: normalizedContractDate,
             rate: Number(form.rate) || 0,
             vatSettings: normalizedVat,
             vatMode: vatSettingsToLegacyMode(normalizedVat),
@@ -1561,9 +1584,25 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
               </ul>
             </div>
             <div className="space-y-3">
-              <div>
-                <Label>Номер контракта</Label>
-                <Input value={form.number} onChange={(event) => setForm((prev) => ({ ...prev, number: event.target.value }))} placeholder="№26/02/2025-АТ/ЮР" />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <Label>Номер контракта</Label>
+                  <Input
+                    value={form.number}
+                    onChange={(event) => setForm((prev) => ({ ...prev, number: event.target.value }))}
+                    placeholder="№26/02/2025-АТ/ЮР"
+                  />
+                </div>
+                <div>
+                  <Label>Дата контракта</Label>
+                  <Input
+                    type="date"
+                    value={toDateInputValue(form.contractDate)}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, contractDate: event.target.value || null }))
+                    }
+                  />
+                </div>
               </div>
               <div>
                 <Label>Заказчик</Label>
@@ -1636,30 +1675,32 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
                 </div>
               )}
               <div>
-                <Label>Тип исполнителя</Label>
-                <Select
-                  value={form.performerType ?? 'gph'}
-                  onValueChange={(value) =>
-                    setForm((prev) => {
-                      const performerType = value as Contract['performerType'];
-                      const vatEligible = performerType === 'ip' || performerType === 'company';
-                      const nextVatSettings = vatEligible
-                        ? normalizeVatSettings(prev.vatSettings)
-                        : { ...DEFAULT_VAT_SETTINGS };
-                      const base: Contract = {
-                        ...prev,
-                        performerType,
-                        vatSettings: nextVatSettings,
-                        vatMode: vatSettingsToLegacyMode(nextVatSettings),
-                        allowedTemplateIds: [],
-                      };
-                      return resolveContractTemplates(base, {
-                        seedDefaults: true,
-                        performerTypeOverride: performerType,
-                      });
-                    })
-                  }
-                >
+                  <Label>Тип исполнителя</Label>
+                  <Select
+                    value={form.performerType ?? 'gph'}
+                    onValueChange={(value) =>
+                      setForm((prev) => {
+                        const performerType = value as Contract['performerType'];
+                        const vatEligible = performerType === 'ip' || performerType === 'company';
+                        const nextVatSettings = vatEligible
+                          ? normalizeVatSettings(prev.vatSettings)
+                          : { ...DEFAULT_VAT_SETTINGS };
+                        const requireNpdReceipt = performerType === 'selfemployed';
+                        const base: Contract = {
+                          ...prev,
+                          performerType,
+                          vatSettings: nextVatSettings,
+                          vatMode: vatSettingsToLegacyMode(nextVatSettings),
+                          requireNpdReceipt,
+                          allowedTemplateIds: [],
+                        };
+                        return resolveContractTemplates(base, {
+                          seedDefaults: true,
+                          performerTypeOverride: performerType,
+                        });
+                      })
+                    }
+                  >
                   <SelectTrigger>
                     <SelectValue placeholder="Тип исполнителя" />
                   </SelectTrigger>
@@ -1709,13 +1750,15 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
                     onCheckedChange={(checked) => setForm((prev) => ({ ...prev, timesheetToggleLocked: checked }))}
                   />
                 </label>
-                <label className="flex items-center justify-between gap-3 rounded-lg border p-3 text-sm">
-                  <span>Обязателен чек НПД</span>
-                  <Switch
-                    checked={Boolean(form.requireNpdReceipt)}
-                    onCheckedChange={(checked) => setForm((prev) => ({ ...prev, requireNpdReceipt: checked }))}
-                  />
-                </label>
+                {form.performerType === 'selfemployed' ? (
+                  <label className="flex items-center justify-between gap-3 rounded-lg border p-3 text-sm">
+                    <span>Обязателен чек НПД</span>
+                    <Switch
+                      checked={Boolean(form.requireNpdReceipt)}
+                      onCheckedChange={(checked) => setForm((prev) => ({ ...prev, requireNpdReceipt: checked }))}
+                    />
+                  </label>
+                ) : null}
                 <label className="flex items-center justify-between gap-3 rounded-lg border p-3 text-sm">
                   <span>Акты по проектам</span>
                   <Switch

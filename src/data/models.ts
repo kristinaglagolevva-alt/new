@@ -15,6 +15,15 @@ export interface WorkspaceSummary {
   parentId?: string | null;
 }
 
+export interface WorkspaceMember {
+  userId: string;
+  email: string;
+  fullName: string;
+  role: WorkspaceRole;
+  isActive: boolean;
+  joinedAt: string;
+}
+
 export interface Task {
   id: string;
   key: string;

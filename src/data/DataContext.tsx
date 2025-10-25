@@ -27,6 +27,7 @@ import type {
   WorkspaceSummary,
   WorkspaceKind,
   WorkspaceRole,
+  WorkspaceMember,
 } from './models';
 import {
   initialContracts,
@@ -48,6 +49,8 @@ interface DatabaseState {
   templates: Template[];
   trackerProjects: TrackerProject[];
   users: User[];
+  workspaceMembers: WorkspaceMember[];
+  allWorkspaces: WorkspaceSummary[];
 }
 
 type TaskFilters = {
@@ -256,6 +259,8 @@ type DatabaseAction =
   | { type: 'set-users'; users: User[] }
   | { type: 'upsert-user'; user: User }
   | { type: 'delete-user'; userId: string }
+  | { type: 'set-workspace-members'; members: WorkspaceMember[] }
+  | { type: 'set-all-workspaces'; workspaces: WorkspaceSummary[] }
   | { type: 'reset-state' };
 
 const createInitialState = (): DatabaseState => ({
@@ -269,6 +274,8 @@ const createInitialState = (): DatabaseState => ({
   templates: initialTemplates,
   trackerProjects: [],
   users: [],
+  workspaceMembers: [],
+  allWorkspaces: [],
 });
 
 const initialState: DatabaseState = createInitialState();
@@ -375,6 +382,18 @@ const databaseReducer = (state: DatabaseState, action: DatabaseAction): Database
         ...state,
         users: state.users.filter((user) => user.id !== action.userId),
         individuals: clearedIndividuals,
+      };
+    }
+    case 'set-workspace-members': {
+      return {
+        ...state,
+        workspaceMembers: action.members,
+      };
+    }
+    case 'set-all-workspaces': {
+      return {
+        ...state,
+        allWorkspaces: action.workspaces,
       };
     }
     case 'upsert-legal-entity': {
@@ -617,6 +636,16 @@ interface DatabaseContextValue extends DatabaseState {
   releaseWorkPackageTasks: (workPackageId: string) => Promise<WorkPackage | null>;
   loadDocuments: () => Promise<DocumentRecord[]>;
   loadImportLogs: (projectKey?: string | null) => Promise<ImportLog[]>;
+  loadWorkspaceMembers: () => Promise<WorkspaceMember[]>;
+  loadAllWorkspaces: () => Promise<WorkspaceSummary[]>;
+  createWorkspaceUser: (payload: {
+    email: string;
+    fullName?: string | null;
+    role: UserRole;
+    password?: string | null;
+    generatePassword?: boolean;
+    workspaceId?: string | null;
+  }) => Promise<{ userId: string; password: string }>;
   saveLegalEntity: (entity: Omit<LegalEntity, 'status'> & { status?: LegalEntity['status'] }) => Promise<LegalEntity>;
   saveIndividual: (individual: Omit<Individual, 'status'> & { status?: Individual['status'] }) => Promise<Individual>;
   saveContract: (contract: Contract) => Promise<Contract>;
@@ -2336,12 +2365,12 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   const loadUsers = useCallback(async () => {
     try {
       const response = await authorizedFetch(`${apiBaseUrl}/users`);
+      if (response.status === 403) {
+        dispatch({ type: 'set-users', users: [] });
+        return [] as User[];
+      }
       if (!response.ok) {
-        const message =
-          response.status === 403
-            ? 'Недостаточно прав для просмотра пользователей'
-            : `Failed to load users: ${response.status}`;
-        throw new Error(message);
+        throw new Error(`Failed to load users: ${response.status}`);
       }
 
       const data = (await response.json()) as Array<Record<string, unknown>>;
@@ -2355,10 +2384,22 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       }
       throw new Error('Не удалось загрузить пользователей');
     }
-  }, [apiBaseUrl, authorizedFetch, mapUserRecord]);
+  }, [apiBaseUrl, authorizedFetch, mapUserRecord, dispatch]);
 
   const registerUser = useCallback(
-    async (payload: { email: string; password: string; fullName?: string | null; role: UserRole }) => {
+    async (payload: {
+      email: string;
+      password: string;
+      fullName?: string | null;
+      role: UserRole;
+      workspace: {
+        mode: 'new' | 'existing';
+        workspaceId?: string | null;
+        name?: string | null;
+        kind?: WorkspaceKind;
+        parentId?: string | null;
+      };
+    }) => {
       try {
         const response = await authorizedFetch(`${apiBaseUrl}/auth/register`, {
           method: 'POST',
@@ -2370,6 +2411,13 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             password: payload.password,
             fullName: payload.fullName ?? undefined,
             role: payload.role,
+            workspace: {
+              mode: payload.workspace.mode,
+              workspace_id: payload.workspace.workspaceId ?? undefined,
+              name: payload.workspace.name ?? undefined,
+              kind: payload.workspace.kind ?? 'tenant',
+              parent_id: payload.workspace.parentId ?? undefined,
+            },
           }),
         });
 
@@ -2398,8 +2446,100 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         throw new Error('Не удалось создать пользователя');
       }
     },
-    [apiBaseUrl, authorizedFetch, mapUserRecord]
+    [apiBaseUrl, authorizedFetch, dispatch, mapUserRecord]
   );
+
+  const loadWorkspaceMembers = useCallback(
+    async (targetWorkspaceId?: string | null) => {
+      const resolvedWorkspaceId = targetWorkspaceId ?? workspaceId;
+      if (!resolvedWorkspaceId) {
+        dispatch({ type: 'set-workspace-members', members: [] });
+        return [] as WorkspaceMember[];
+      }
+      const response = await authorizedFetch(`${apiBaseUrl}/workspaces/${resolvedWorkspaceId}/members`);
+      if (response.status === 403) {
+        if (!targetWorkspaceId || targetWorkspaceId === workspaceId) {
+          dispatch({ type: 'set-workspace-members', members: [] });
+        }
+        throw new Error('Недостаточно прав для просмотра участников');
+      }
+      if (!response.ok) {
+        throw new Error(`Failed to load workspace members: ${response.status}`);
+      }
+      const data = (await response.json()) as WorkspaceMember[];
+      dispatch({ type: 'set-workspace-members', members: data });
+      return data;
+    },
+    [apiBaseUrl, authorizedFetch, dispatch, workspaceId]
+  );
+
+  const createWorkspaceUser = useCallback(
+    async (payload: {
+      email: string;
+      fullName?: string | null;
+      role: UserRole;
+      password?: string | null;
+      generatePassword?: boolean;
+      workspaceId?: string | null;
+    }) => {
+      const targetWorkspaceId = payload.workspaceId ?? workspaceId;
+      if (!targetWorkspaceId) {
+        throw new Error('Не выбрано рабочее пространство');
+      }
+      const response = await authorizedFetch(`${apiBaseUrl}/workspaces/${targetWorkspaceId}/users`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: payload.email,
+          fullName: payload.fullName ?? undefined,
+          role: payload.role,
+          password: payload.password ?? undefined,
+          generatePassword: payload.generatePassword ?? true,
+        }),
+      });
+
+      if (!response.ok) {
+        let message = 'Не удалось создать пользователя';
+        try {
+          const detail = await response.json();
+          if (detail?.detail) {
+            message = typeof detail.detail === 'string' ? detail.detail : JSON.stringify(detail.detail);
+          }
+        } catch {
+          /* ignore */
+        }
+        throw new Error(message);
+      }
+
+      const data = (await response.json()) as { userId: string; password: string };
+      loadWorkspaceMembers(targetWorkspaceId).catch(() => {
+        /* ignore */
+      });
+      return data;
+    },
+    [apiBaseUrl, authorizedFetch, loadWorkspaceMembers, workspaceId]
+  );
+
+  const loadAllWorkspaces = useCallback(async () => {
+    try {
+      const response = await authorizedFetch(`${apiBaseUrl}/admin/workspaces`);
+      if (response.status === 403) {
+        dispatch({ type: 'set-all-workspaces', workspaces: [] });
+        return [] as WorkspaceSummary[];
+      }
+      if (!response.ok) {
+        throw new Error(`Failed to load workspaces: ${response.status}`);
+      }
+      const data = (await response.json()) as WorkspaceSummary[];
+      dispatch({ type: 'set-all-workspaces', workspaces: data });
+      return data;
+    } catch (error) {
+      console.error('[DataContext] Unable to load workspace catalog:', error);
+      throw error instanceof Error ? error : new Error('Не удалось загрузить рабочие пространства');
+    }
+  }, [apiBaseUrl, authorizedFetch, dispatch]);
 
   const resetUserPassword = useCallback(
     async (userId: string) => {
@@ -3421,6 +3561,9 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       resetUserPassword,
       deleteUser,
       updateUserRoles,
+      loadWorkspaceMembers,
+      createWorkspaceUser,
+      loadAllWorkspaces,
       updateProjectLinks,
       addDocumentNote,
       tasksLoadToken,
@@ -3455,6 +3598,9 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       resetUserPassword,
       deleteUser,
       updateUserRoles,
+      loadWorkspaceMembers,
+      createWorkspaceUser,
+      loadAllWorkspaces,
       saveLegalEntity,
       saveIndividual,
       saveContract,

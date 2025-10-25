@@ -22,6 +22,7 @@ import {
 } from "./ui/select";
 import { useAuth } from "../data/AuthContext";
 import { useDatabase } from "../data/DataContext";
+import { useWorkspace } from "../data/WorkspaceContext";
 import {
   Users as UsersIcon,
   UserPlus,
@@ -34,7 +35,7 @@ import {
   Trash2,
   Plus,
 } from "lucide-react";
-import type { User, UserRole } from "../data/models";
+import type { User, UserRole, WorkspaceRole } from "../data/models";
 
 const ROLE_LABELS: Record<UserRole, string> = {
   admin: 'Администратор',
@@ -55,6 +56,9 @@ const ROLE_BADGE_VARIANT: Record<UserRole, 'default' | 'secondary' | 'outline'> 
 };
 
 const CREATION_ROLES: UserRole[] = ['admin', 'accountant', 'manager', 'performer'];
+const WORKSPACE_CREATABLE_ROLES: UserRole[] = ['accountant', 'manager', 'performer', 'viewer'];
+
+const SUPER_ADMIN_EMAIL = (import.meta.env.VITE_SUPER_ADMIN_EMAIL ?? 'admin@example.com').toLowerCase();
 
 const generateSecurePassword = (length = 12): string => {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@$!%*?&';
@@ -68,7 +72,20 @@ const generateSecurePassword = (length = 12): string => {
 
 export function SettingsPage() {
   const { user } = useAuth();
-  const { users, loadUsers, registerUser, resetUserPassword, deleteUser, updateUserRoles } = useDatabase();
+  const { currentWorkspace } = useWorkspace();
+  const {
+    users,
+    loadUsers,
+    registerUser,
+    resetUserPassword,
+    deleteUser,
+    updateUserRoles,
+    workspaceMembers,
+    loadWorkspaceMembers,
+    createWorkspaceUser,
+    allWorkspaces,
+    loadAllWorkspaces,
+  } = useDatabase();
 
   const [usersLoading, setUsersLoading] = useState(false);
   const [usersError, setUsersError] = useState<string | null>(null);
@@ -76,11 +93,15 @@ export function SettingsPage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [localCopyFeedback, setLocalCopyFeedback] = useState<string | null>(null);
   const [lastCredentials, setLastCredentials] = useState<{ email: string; password: string } | null>(null);
+  const [localCredentials, setLocalCredentials] = useState<{ email: string; password: string } | null>(null);
   const [resettingUserId, setResettingUserId] = useState<string | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
   const [updatingRoleId, setUpdatingRoleId] = useState<string | null>(null);
   const copyTimeoutRef = useRef<number | null>(null);
+  const localCopyTimeoutRef = useRef<number | null>(null);
+  const workspaceCatalogLoadedRef = useRef(false);
   const usersLoadedRef = useRef(false);
 
   const [form, setForm] = useState<{ email: string; fullName: string; role: UserRole; password: string }>(
@@ -91,9 +112,37 @@ export function SettingsPage() {
       password: '',
     })
   );
+  const [workspaceMode, setWorkspaceMode] = useState<'new' | 'existing'>('new');
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
+  const [workspaceCatalogLoading, setWorkspaceCatalogLoading] = useState(false);
+  const [workspaceCatalogError, setWorkspaceCatalogError] = useState<string | null>(null);
+  const [workspaceMembersLoading, setWorkspaceMembersLoading] = useState(false);
+  const [workspaceMembersError, setWorkspaceMembersError] = useState<string | null>(null);
+  const [localCreateError, setLocalCreateError] = useState<string | null>(null);
+  const [localCreating, setLocalCreating] = useState(false);
+  const [localPasswordMode, setLocalPasswordMode] = useState<'generated' | 'manual'>('generated');
+  const [localForm, setLocalForm] = useState<{ email: string; fullName: string; role: UserRole; password: string }>(
+    () => ({
+      email: '',
+      fullName: '',
+      role: 'accountant',
+      password: '',
+    })
+  );
 
-  const isAdmin = user?.role === 'admin';
-  const canViewUsers = user?.role === 'admin' || user?.role === 'accountant';
+  const normalizedUserEmail = user?.email?.toLowerCase() ?? null;
+  const isSuperAdmin = normalizedUserEmail === SUPER_ADMIN_EMAIL;
+  const canManageUsers = isSuperAdmin;
+  const canViewUsers = isSuperAdmin;
+  const currentWorkspaceRole = useMemo<WorkspaceRole>(() => {
+    if (!currentWorkspace?.id || !user) {
+      return (user?.workspaces?.[0]?.role ?? user?.role ?? 'viewer') as WorkspaceRole;
+    }
+    const matched = (user.workspaces ?? []).find((workspace) => workspace.id === currentWorkspace.id);
+    return (matched?.role ?? user.role ?? 'viewer') as WorkspaceRole;
+  }, [currentWorkspace?.id, user]);
+  const canManageWorkspace = !isSuperAdmin && (currentWorkspaceRole === 'owner' || currentWorkspaceRole === 'admin');
 
   const visibleUsers = useMemo(() => {
     if (!canViewUsers) {
@@ -134,9 +183,67 @@ export function SettingsPage() {
   }, [canViewUsers, handleReloadUsers]);
 
   useEffect(() => {
+    if (!isSuperAdmin) {
+      workspaceCatalogLoadedRef.current = false;
+      return;
+    }
+    if (workspaceCatalogLoadedRef.current) {
+      return;
+    }
+    setWorkspaceCatalogLoading(true);
+    setWorkspaceCatalogError(null);
+    loadAllWorkspaces()
+      .then(() => {
+        workspaceCatalogLoadedRef.current = true;
+      })
+      .catch((error) => {
+        workspaceCatalogLoadedRef.current = false;
+        const message = error instanceof Error ? error.message : 'Не удалось загрузить список рабочих пространств';
+        setWorkspaceCatalogError(message);
+      })
+      .finally(() => {
+        setWorkspaceCatalogLoading(false);
+      });
+  }, [isSuperAdmin, loadAllWorkspaces]);
+
+  const handleReloadWorkspaceMembers = useCallback(async () => {
+    if (!currentWorkspace?.id) {
+      return;
+    }
+    setWorkspaceMembersLoading(true);
+    setWorkspaceMembersError(null);
+    try {
+      await loadWorkspaceMembers(currentWorkspace.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось загрузить участников';
+      setWorkspaceMembersError(message);
+    } finally {
+      setWorkspaceMembersLoading(false);
+    }
+  }, [currentWorkspace?.id, loadWorkspaceMembers]);
+
+  useEffect(() => {
+    if (!canManageWorkspace) {
+      loadWorkspaceMembers(null).catch(() => {
+        /* ignore */
+      });
+      return;
+    }
+    if (!currentWorkspace?.id) {
+      return;
+    }
+    handleReloadWorkspaceMembers().catch(() => {
+      /* handled separately */
+    });
+  }, [canManageWorkspace, currentWorkspace?.id, handleReloadWorkspaceMembers, loadWorkspaceMembers]);
+
+  useEffect(() => {
     return () => {
       if (copyTimeoutRef.current !== null) {
         window.clearTimeout(copyTimeoutRef.current);
+      }
+      if (localCopyTimeoutRef.current !== null) {
+        window.clearTimeout(localCopyTimeoutRef.current);
       }
     };
   }, []);
@@ -178,8 +285,48 @@ export function SettingsPage() {
     }
   }, [lastCredentials]);
 
+  const handleCopyLocalCredentials = useCallback(async () => {
+    if (!localCredentials) {
+      return;
+    }
+    const payload = `Email: ${localCredentials.email}\nПароль: ${localCredentials.password}`;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(payload);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = payload;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setLocalCopyFeedback('Данные скопированы в буфер обмена');
+    } catch (error) {
+      console.error('[SettingsPage] Unable to copy local credentials', error);
+      setLocalCopyFeedback('Не удалось скопировать данные');
+    } finally {
+      if (localCopyTimeoutRef.current !== null) {
+        window.clearTimeout(localCopyTimeoutRef.current);
+      }
+      localCopyTimeoutRef.current = window.setTimeout(() => setLocalCopyFeedback(null), 2500);
+    }
+  }, [localCredentials]);
+
+  const handleLocalPasswordModeChange = useCallback((checked: boolean) => {
+    setLocalPasswordMode(checked ? 'generated' : 'manual');
+    if (checked) {
+      setLocalForm((prev) => ({ ...prev, password: '' }));
+    }
+  }, []);
+
   const handleResetPassword = useCallback(
     async (account: User) => {
+      if (!canManageUsers) {
+        return;
+      }
       const confirmed = window.confirm(`Сбросить пароль для пользователя ${account.email}?`);
       if (!confirmed) {
         return;
@@ -198,11 +345,14 @@ export function SettingsPage() {
         setResettingUserId(null);
       }
     },
-    [resetUserPassword]
+    [canManageUsers, resetUserPassword]
   );
 
   const handleDeleteUser = useCallback(
     async (account: User) => {
+      if (!canManageUsers) {
+        return;
+      }
       const confirmed = window.confirm(`Удалить доступ для пользователя ${account.email}?`);
       if (!confirmed) {
         return;
@@ -222,11 +372,14 @@ export function SettingsPage() {
         setDeletingUserId(null);
       }
     },
-    [deleteUser, lastCredentials]
+    [canManageUsers, deleteUser, lastCredentials]
   );
 
   const handleToggleUserRole = useCallback(
     async (account: User, role: UserRole, checked: boolean) => {
+      if (!canManageUsers) {
+        return;
+      }
       if (!MUTABLE_ROLES.includes(role)) {
         return;
       }
@@ -269,13 +422,13 @@ export function SettingsPage() {
         setUpdatingRoleId(null);
       }
     },
-    [updateUserRoles]
+    [canManageUsers, updateUserRoles]
   );
 
   const handleCreateUser = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      if (!isAdmin) {
+      if (!canManageUsers) {
         return;
       }
       setCreateError(null);
@@ -302,6 +455,11 @@ export function SettingsPage() {
         return;
       }
 
+      if (workspaceMode === 'existing' && !selectedWorkspaceId) {
+        setCreateError('Выберите рабочее пространство');
+        return;
+      }
+
       setCreating(true);
       try {
         const created = await registerUser({
@@ -309,6 +467,21 @@ export function SettingsPage() {
           password,
           fullName: fullName || null,
           role: form.role,
+          workspace: workspaceMode === 'new'
+            ? {
+                mode: 'new',
+                workspaceId: null,
+                name: workspaceName || fullName || email,
+                kind: 'tenant',
+                parentId: null,
+              }
+            : {
+                mode: 'existing',
+                workspaceId: selectedWorkspaceId,
+                name: undefined,
+                kind: 'tenant',
+                parentId: null,
+              },
         });
         usersLoadedRef.current = true;
         setLastCredentials({ email: created.email, password });
@@ -319,6 +492,11 @@ export function SettingsPage() {
           role: prev.role,
           password: '',
         }));
+        if (workspaceMode === 'new') {
+          setWorkspaceName('');
+        } else {
+          setSelectedWorkspaceId(null);
+        }
         if (passwordMode === 'manual') {
           setPasswordMode('manual');
         }
@@ -329,7 +507,63 @@ export function SettingsPage() {
         setCreating(false);
       }
     },
-    [form, isAdmin, passwordMode, registerUser]
+    [form, canManageUsers, passwordMode, registerUser, workspaceMode, workspaceName, selectedWorkspaceId]
+  );
+
+  const handleCreateWorkspaceUser = useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!canManageWorkspace || !currentWorkspace?.id) {
+        return;
+      }
+      setLocalCreateError(null);
+
+      const email = localForm.email.trim().toLowerCase();
+      const fullName = localForm.fullName.trim();
+      if (!email) {
+        setLocalCreateError('Укажите email пользователя');
+        return;
+      }
+
+      let password = localForm.password.trim();
+      if (localPasswordMode === 'generated') {
+        password = generateSecurePassword();
+      }
+
+      if (!password) {
+        setLocalCreateError('Введите пароль или включите автоматическую генерацию');
+        return;
+      }
+
+      if (password.length < 8) {
+        setLocalCreateError('Пароль должен содержать не менее 8 символов');
+        return;
+      }
+
+      setLocalCreating(true);
+      try {
+        const result = await createWorkspaceUser({
+          email,
+          fullName: fullName || null,
+          role: localForm.role,
+          password: localPasswordMode === 'manual' ? password : undefined,
+          generatePassword: localPasswordMode === 'generated',
+          workspaceId: currentWorkspace.id,
+        });
+        setLocalCredentials({ email, password: result.password });
+        setLocalCopyFeedback(null);
+        setLocalForm((prev) => ({ ...prev, email: '', fullName: '', password: '' }));
+        if (localPasswordMode === 'manual') {
+          setLocalPasswordMode('manual');
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Не удалось создать пользователя';
+        setLocalCreateError(message);
+      } finally {
+        setLocalCreating(false);
+      }
+    },
+    [canManageWorkspace, createWorkspaceUser, currentWorkspace?.id, localForm, localPasswordMode]
   );
 
   return (
@@ -343,7 +577,7 @@ export function SettingsPage() {
         </div>
 
         <div className="space-y-6 max-w-4xl">
-          {canViewUsers ? (
+          {isSuperAdmin ? (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -354,7 +588,7 @@ export function SettingsPage() {
               <CardContent className="space-y-6">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <p className="text-sm text-muted-foreground md:max-w-md">
-                    Создавайте аккаунты для администраторов, бухгалтеров, менеджеров и исполнителей.
+                    Каждый доступ открывает отдельный личный кабинет и рабочее пространство. Выдавайте их только тем командам, которым нужен самостоятельный контур и Jira-подключение.
                   </p>
                   <div className="flex gap-2">
                     <Button
@@ -408,6 +642,65 @@ export function SettingsPage() {
                           Скрыть
                         </Button>
                       </div>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <Label htmlFor="workspace-mode">Тип доступа</Label>
+                        <Select value={workspaceMode} onValueChange={(value) => setWorkspaceMode(value as 'new' | 'existing')}>
+                          <SelectTrigger id="workspace-mode" className="mt-2 border-muted-foreground/40 bg-input-background">
+                            <SelectValue placeholder="Создать новое пространство" />
+                          </SelectTrigger>
+                          <SelectContent className="bg-card">
+                            <SelectItem value="new">Создать новое рабочее пространство</SelectItem>
+                            <SelectItem value="existing">Подключить к существующему</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          Новый кабинет будет полностью изолирован от других клиентов.
+                        </p>
+                      </div>
+                      {workspaceMode === 'new' ? (
+                        <div>
+                          <Label htmlFor="workspace-name">Название личного кабинета</Label>
+                          <Input
+                            id="workspace-name"
+                            type="text"
+                            placeholder="ООО Ромашка"
+                            className="mt-2"
+                            value={workspaceName}
+                            onChange={(event) => setWorkspaceName(event.target.value)}
+                          />
+                          <p className="mt-2 text-xs text-muted-foreground">Покажем владельцу кабинета на главной странице.</p>
+                        </div>
+                      ) : (
+                        <div>
+                          <Label htmlFor="workspace-existing">Рабочее пространство</Label>
+                          <Select
+                            value={selectedWorkspaceId ?? ''}
+                            onValueChange={(value) => setSelectedWorkspaceId(value || null)}
+                            disabled={workspaceCatalogLoading || allWorkspaces.length === 0}
+                          >
+                            <SelectTrigger id="workspace-existing" className="mt-2 border-muted-foreground/40 bg-input-background">
+                              <SelectValue placeholder={workspaceCatalogLoading ? 'Загрузка...' : 'Выберите пространство'} />
+                            </SelectTrigger>
+                            <SelectContent className="bg-card max-h-64">
+                              {allWorkspaces.map((workspace) => (
+                                <SelectItem key={workspace.id} value={workspace.id}>
+                                  {workspace.name} · {workspace.key}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {workspaceCatalogError ? (
+                            <p className="mt-2 text-xs text-destructive">{workspaceCatalogError}</p>
+                          ) : null}
+                          {!workspaceCatalogError && !workspaceCatalogLoading && allWorkspaces.length === 0 ? (
+                            <p className="mt-2 text-xs text-muted-foreground">
+                              Нет доступных пространств. Создайте новое.
+                            </p>
+                          ) : null}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : null}
@@ -510,7 +803,7 @@ export function SettingsPage() {
                                   )}
                                   Сбросить
                                 </Button>
-                                {isAdmin ? (
+                                {canManageUsers ? (
                                     <Button
                                       variant="ghost"
                                       size="sm"
@@ -543,7 +836,7 @@ export function SettingsPage() {
 
                 <Separator />
 
-                {isAdmin ? (
+                {canManageUsers ? (
                   <form className="space-y-4" onSubmit={handleCreateUser}>
                     <div className="grid gap-4 md:grid-cols-2">
                       <div>
@@ -630,11 +923,230 @@ export function SettingsPage() {
                       </div>
                     </div>
                   </form>
-                ) : (
-                  <div className="rounded-md border border-muted-foreground/30 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
-                    Создание новых пользователей доступно только администратору.
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {!isSuperAdmin && canManageWorkspace ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <UsersIcon className="w-5 h-5" />
+                  Участники вашего пространства
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <p className="text-sm text-muted-foreground md:max-w-md">
+                    Добавляйте бухгалтеров, менеджеров и исполнителей только в текущий контур. Эти пользователи не увидят другие рабочие пространства.
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => handleReloadWorkspaceMembers().catch(() => {/* noop */})}
+                      disabled={workspaceMembersLoading}
+                    >
+                      <RefreshCw className={`h-4 w-4 ${workspaceMembersLoading ? 'animate-spin' : ''}`} />
+                      Обновить
+                    </Button>
                   </div>
-                )}
+                </div>
+
+                {workspaceMembersError ? (
+                  <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                    {workspaceMembersError}
+                  </div>
+                ) : null}
+
+                {localCredentials ? (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <div className="text-sm font-semibold text-blue-900">Новый пользователь создан</div>
+                        <div className="mt-2 space-y-1 text-sm text-blue-800">
+                          <div>
+                            Email:{' '}
+                            <code className="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium">
+                              {localCredentials.email}
+                            </code>
+                          </div>
+                          <div>
+                            Пароль:{' '}
+                            <code className="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium">
+                              {localCredentials.password}
+                            </code>
+                          </div>
+                        </div>
+                        {localCopyFeedback ? (
+                          <div className="mt-2 text-xs text-blue-700">{localCopyFeedback}</div>
+                        ) : null}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button variant="secondary" size="sm" className="gap-1" onClick={handleCopyLocalCredentials}>
+                          <ClipboardCopy className="h-4 w-4" />
+                          Скопировать
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => setLocalCredentials(null)}>
+                          Скрыть
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="space-y-3">
+                  <div className="overflow-x-auto rounded-lg border">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-muted/40 text-left text-sm text-muted-foreground border-b border-border">
+                        <tr>
+                          <th className="px-3 py-3 font-medium">Пользователь</th>
+                          <th className="px-3 py-3 font-medium">Роль</th>
+                          <th className="px-3 py-3 font-medium">Статус</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {workspaceMembers.map((member) => (
+                          <tr key={member.userId} className="bg-card">
+                            <td className="px-3 py-2">
+                              <div className="font-medium text-foreground">{member.fullName || member.email}</div>
+                              <div className="text-xs text-muted-foreground">{member.email}</div>
+                            </td>
+                            <td className="px-3 py-2">
+                              <Badge variant={ROLE_BADGE_VARIANT[member.role] ?? 'outline'}>
+                                {ROLE_LABELS[member.role] ?? member.role}
+                              </Badge>
+                            </td>
+                            <td className="px-3 py-2">
+                              <Badge variant={member.isActive ? 'default' : 'secondary'}>
+                                {member.isActive ? 'Активен' : 'Выключен'}
+                              </Badge>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {workspaceMembers.length === 0 && !workspaceMembersLoading ? (
+                    <div className="rounded-md border border-dashed border-muted-foreground/30 px-4 py-6 text-center text-sm text-muted-foreground">
+                      Пока нет участников пространства
+                    </div>
+                  ) : null}
+                </div>
+
+                <Separator />
+
+                <form className="space-y-4" onSubmit={handleCreateWorkspaceUser}>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <Label htmlFor="local-user-email">Email</Label>
+                      <Input
+                        id="local-user-email"
+                        type="email"
+                        autoComplete="off"
+                        required
+                        placeholder="team@company.com"
+                        className="mt-2"
+                        value={localForm.email}
+                        onChange={(event) => setLocalForm((prev) => ({ ...prev, email: event.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="local-user-full-name">Имя и фамилия</Label>
+                      <Input
+                        id="local-user-full-name"
+                        type="text"
+                        placeholder="Иван Иванов"
+                        className="mt-2"
+                        value={localForm.fullName}
+                        onChange={(event) => setLocalForm((prev) => ({ ...prev, fullName: event.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="local-user-role">Роль</Label>
+                      <Select
+                        value={localForm.role}
+                        onValueChange={(nextRole) => {
+                          const roleValue = nextRole as UserRole;
+                          setLocalForm((prev) => ({
+                            ...prev,
+                            role: WORKSPACE_CREATABLE_ROLES.includes(roleValue) ? roleValue : prev.role,
+                          }));
+                        }}
+                      >
+                        <SelectTrigger id="local-user-role" className="mt-2 border-muted-foreground/40 bg-input-background">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-card">
+                          {WORKSPACE_CREATABLE_ROLES.map((roleOption) => (
+                            <SelectItem key={roleOption} value={roleOption}>
+                              {ROLE_LABELS[roleOption]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="rounded-md border border-muted-foreground/20 bg-muted/30 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium">Сгенерировать пароль автоматически</div>
+                          <div className="text-xs text-muted-foreground">Пароль покажем один раз после создания.</div>
+                        </div>
+                        <Switch checked={localPasswordMode === 'generated'} onCheckedChange={handleLocalPasswordModeChange} />
+                      </div>
+                      {localPasswordMode === 'manual' ? (
+                        <div className="mt-3">
+                          <Label htmlFor="local-user-password" className="text-xs text-muted-foreground">
+                            Пароль (минимум 8 символов)
+                          </Label>
+                          <Input
+                            id="local-user-password"
+                            type="text"
+                            autoComplete="new-password"
+                            className="mt-2"
+                            value={localForm.password}
+                            onChange={(event) => setLocalForm((prev) => ({ ...prev, password: event.target.value }))}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                  {localCreateError ? <div className="text-sm text-destructive">{localCreateError}</div> : null}
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <Button type="submit" className="gap-2" disabled={localCreating}>
+                      <UserPlus className="h-4 w-4" />
+                      Добавить пользователя
+                    </Button>
+                    <div className="text-xs text-muted-foreground">
+                      Аккаунт автоматически будет привязан к текущему рабочему пространству.
+                    </div>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {!isSuperAdmin && !canManageWorkspace ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <UsersIcon className="w-5 h-5" />
+                  Пользователи и доступ
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  Управление доступами выполняет оператор платформы. Каждый новый пользователь получает отдельный личный кабинет и своё рабочее пространство.
+                </p>
+                <p>
+                  Если вашей команде нужен новый доступ, напишите на&nbsp;
+                  <a className="font-medium text-primary underline-offset-2 hover:underline" href={`mailto:${SUPER_ADMIN_EMAIL}`}>
+                    {SUPER_ADMIN_EMAIL}
+                  </a>{' '}
+                  или свяжитесь с администратором платформы.
+                </p>
               </CardContent>
             </Card>
           ) : null}

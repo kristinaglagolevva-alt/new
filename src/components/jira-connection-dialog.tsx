@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from "./ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Progress } from "./ui/progress";
@@ -197,12 +197,15 @@ export function JiraConnectionDialog({ open, onOpenChange, onConnectionComplete 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg" aria-describedby="jira-connection-description">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Link className="w-5 h-5 text-blue-600" />
             Подключение Jira
           </DialogTitle>
+          <DialogDescription id="jira-connection-description">
+            Свяжите ваш аккаунт Atlassian, чтобы импортировать проекты и задачи в выбранный контур.
+          </DialogDescription>
         </DialogHeader>
 
         {step === 'auth' && (
