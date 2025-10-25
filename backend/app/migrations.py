@@ -21,12 +21,21 @@ def _column_exists(engine: Engine, table: str, column: str) -> bool:
         return any(row[1] == column for row in result.fetchall())
 
 
+def _table_exists(engine: Engine, table: str) -> bool:
+    query = "SELECT name FROM sqlite_master WHERE type='table' AND name=:table"
+    with engine.connect() as connection:
+        result = connection.execute(text(query), {"table": table})
+        return result.first() is not None
+
+
 def _ensure_table(engine: Engine, ddl: str) -> None:
     with engine.connect() as connection:
         connection.execute(text(ddl))
 
 
 def _ensure_columns(engine: Engine, table: str, columns: Iterable[tuple[str, str]]) -> None:
+    if not _table_exists(engine, table):
+        return
     for column, ddl in columns:
         if _column_exists(engine, table, column):
             continue
@@ -35,6 +44,8 @@ def _ensure_columns(engine: Engine, table: str, columns: Iterable[tuple[str, str
 
 
 def _populate_workspace(engine: Engine, table: str) -> None:
+    if not _table_exists(engine, table):
+        return
     if not _column_exists(engine, table, "workspace_id"):
         return
     with engine.connect() as connection:
