@@ -1,0 +1,30 @@
+# Node / React artifacts
+node_modules/
+dist/
+build/
+.vite/
+*.log
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.env
+.env.local
+.env.development
+.env.production
+
+# Python
+__pycache__/
+*.pyc
+server/.venv/
+backend/.venv/
+
+# macOS
+.DS_Store
+.vscode/
+
+# Generated data
+backend/data/*.db
+backend/data/documents/
+backend/data/jira_connections.json

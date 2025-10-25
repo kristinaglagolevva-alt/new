@@ -1,0 +1,326 @@
+@page {
+  size: A4;
+  margin: 2cm;
+}
+
+body.doc-template,
+.doc-template-preview {
+  font-family: "Times New Roman", serif;
+  font-size: 12pt;
+  line-height: 1.2;
+  color: #000;
+}
+
+body.doc-template {
+  margin: 2cm;
+  white-space: pre-wrap;
+}
+
+body.doc-template strong,
+.doc-template-preview strong {
+  font-weight: 700;
+}
+
+body.doc-template p,
+.doc-template-preview p {
+  margin: 0 0 6pt;
+  text-indent: 1.25cm;
+  text-align: justify;
+}
+
+body.doc-template p.no-indent,
+.doc-template-preview p.no-indent,
+body.doc-template p.doc-no-indent,
+.doc-template-preview p.doc-no-indent,
+body.doc-template p[style*="text-align:center"],
+.doc-template-preview p[style*="text-align:center"],
+body.doc-template p[style*="text-align: center"],
+.doc-template-preview p[style*="text-align: center"],
+body.doc-template p[style*="text-align:right"],
+.doc-template-preview p[style*="text-align:right"],
+body.doc-template p[style*="text-align: right"],
+.doc-template-preview p[style*="text-align: right"],
+body.doc-template p[style*="margin-left: 0"],
+.doc-template-preview p[style*="margin-left: 0"],
+body.doc-template p[style*="margin-left:0"],
+.doc-template-preview p[style*="margin-left:0"] {
+  text-indent: 0;
+  text-align: inherit;
+}
+
+body.doc-template p.doc-center,
+.doc-template-preview p.doc-center {
+  text-indent: 0;
+  text-align: center;
+}
+
+body.doc-template p.doc-right,
+.doc-template-preview p.doc-right {
+  text-indent: 0;
+  text-align: right;
+}
+
+body.doc-template p.doc-flexline,
+.doc-template-preview p.doc-flexline {
+  text-indent: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12pt;
+  flex-wrap: nowrap;
+}
+
+body.doc-template p.doc-flexline .doc-flexline__tab,
+.doc-template-preview p.doc-flexline .doc-flexline__tab {
+  flex: 1 1 auto;
+}
+
+body.doc-template p.doc-flexline span:last-child,
+.doc-template-preview p.doc-flexline span:last-child {
+  text-align: right;
+}
+
+body.doc-template span[style*="mso-tab-count"],
+.doc-template-preview span[style*="mso-tab-count"] {
+  display: inline-block;
+  min-width: 2.5cm;
+}
+
+body.doc-template ul,
+body.doc-template ol,
+.doc-template-preview ul,
+.doc-template-preview ol {
+  margin: 0 0 6pt 1.27cm;
+  padding: 0 0 0 0.4cm;
+  list-style-position: outside;
+}
+
+body.doc-template ol,
+.doc-template-preview ol {
+  list-style: decimal;
+}
+
+body.doc-template ul,
+.doc-template-preview ul {
+  list-style: disc;
+}
+
+body.doc-template li,
+.doc-template-preview li {
+  margin: 0;
+}
+
+body.doc-template li p,
+.doc-template-preview li p {
+  margin: 0;
+  text-indent: 0;
+  text-align: inherit;
+}
+
+body.doc-template span[style*="mso-list:ignore" i],
+.doc-template-preview span[style*="mso-list:ignore" i] {
+  display: inline-block;
+  min-width: 1.1cm;
+}
+
+body.doc-template table,
+.doc-template-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12pt 0;
+  border: none;
+}
+
+body.doc-template table.doc-table-plain,
+.doc-template-preview table.doc-table-plain {
+  border: none;
+}
+
+body.doc-template table.doc-table-plain td,
+.doc-template-preview table.doc-table-plain td {
+  border: none;
+}
+
+body.doc-template th,
+body.doc-template td,
+.doc-template-preview th,
+.doc-template-preview td {
+  border: none;
+  padding: 4pt 6pt;
+  vertical-align: top;
+  text-indent: 0;
+  text-align: left;
+}
+
+body.doc-template th,
+.doc-template-preview th {
+  font-weight: 700;
+  text-align: center;
+}
+
+body.doc-template table.doc-table-striped thead th,
+.doc-template-preview table.doc-table-striped thead th {
+  background-color: #f3f4f6;
+}
+
+body.doc-template table.doc-table-bordered,
+body.doc-template table.doc-table-striped,
+body.doc-template table.doc-table-signature,
+.doc-template-preview table.doc-table-bordered,
+.doc-template-preview table.doc-table-striped,
+.doc-template-preview table.doc-table-signature {
+  border: 1pt solid #000;
+}
+
+.doc-template-preview table.doc-table-signature {
+  border: 1.5pt solid #000;
+}
+
+body.doc-template table.doc-table-bordered th,
+body.doc-template table.doc-table-bordered td,
+body.doc-template table.doc-table-striped th,
+body.doc-template table.doc-table-striped td,
+.doc-template-preview table.doc-table-bordered th,
+.doc-template-preview table.doc-table-bordered td,
+.doc-template-preview table.doc-table-striped th,
+.doc-template-preview table.doc-table-striped td {
+  border: 1pt solid #000;
+}
+
+body.doc-template table.doc-table-transparent,
+.doc-template-preview table.doc-table-transparent {
+  border: none !important;
+}
+
+body.doc-template table.doc-table-transparent th,
+body.doc-template table.doc-table-transparent td,
+.doc-template-preview table.doc-table-transparent th,
+.doc-template-preview table.doc-table-transparent td {
+  border: none !important;
+}
+
+body.doc-template tfoot td,
+.doc-template-preview tfoot td {
+  font-weight: 700;
+}
+
+body.doc-template tfoot td:first-child,
+.doc-template-preview tfoot td:first-child {
+  text-align: right;
+}
+
+body.doc-template table.doc-table-signature,
+.doc-template-preview table.doc-table-signature {
+  margin-top: 18pt;
+  border: 1.5pt solid #000;
+}
+
+body.doc-template table.doc-table-signature td,
+.doc-template-preview table.doc-table-signature td {
+  border: 1.5pt solid #000;
+  padding: 6pt 8pt;
+  height: 32pt;
+  vertical-align: bottom;
+}
+
+body.doc-template table.doc-table-signature td:first-child,
+body.doc-template table.doc-table-signature td:last-child,
+.doc-template-preview table.doc-table-signature td:first-child,
+.doc-template-preview table.doc-table-signature td:last-child {
+  width: 50%;
+}
+
+body.doc-template table.doc-table-signature .doc-label,
+.doc-template-preview table.doc-table-signature .doc-label {
+  font-weight: 700;
+  text-indent: 0;
+}
+
+body.doc-template table + p,
+.doc-template-preview table + p {
+  margin-top: 12pt;
+}
+
+body.doc-template hr.doc-divider,
+.doc-template-preview hr.doc-divider {
+  border: none;
+  border-top: 1pt solid #000;
+  margin: 12pt 0;
+}
+
+body.doc-template .doc-title,
+.doc-template-preview .doc-title {
+  text-indent: 0;
+  text-align: center;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 6pt;
+}
+
+body.doc-template .doc-subtitle,
+.doc-template-preview .doc-subtitle {
+  text-indent: 0;
+  text-align: center;
+  margin-bottom: 6pt;
+}
+
+body.doc-template .doc-meta-line,
+.doc-template-preview .doc-meta-line {
+  text-indent: 0;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6pt;
+}
+
+body.doc-template .doc-meta-line span:first-child,
+.doc-template-preview .doc-meta-line span:first-child {
+  text-align: left;
+}
+
+body.doc-template .doc-meta-line span:last-child,
+.doc-template-preview .doc-meta-line span:last-child {
+  text-align: right;
+  min-width: 5.5cm;
+}
+
+body.doc-template .doc-placeholder,
+.doc-template-preview .doc-placeholder {
+  display: inline-block;
+  min-width: 2cm;
+  border-bottom: 0.5pt solid #000;
+  text-indent: 0;
+}
+
+body.doc-template .doc-note,
+.doc-template-preview .doc-note {
+  font-size: 10pt;
+  text-indent: 0;
+  margin-top: 4pt;
+}
+
+body.doc-template .doc-small,
+.doc-template-preview .doc-small {
+  font-size: 10pt;
+}
+
+body.doc-template sup,
+.doc-template-preview sup {
+  font-size: 9pt;
+}
+
+body.doc-template table.doc-table-transparent,
+.doc-template-preview table.doc-table-transparent {
+  border: none;
+}
+
+body.doc-template table.doc-table-transparent td,
+.doc-template-preview table.doc-table-transparent td {
+  border: none;
+  padding: 3pt 4pt;
+}
+
+.doc-template-preview .doc-editor-content {
+  width: 100%;
+  background-color: transparent;
+}
