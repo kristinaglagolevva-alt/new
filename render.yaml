@@ -13,11 +13,11 @@ services:
       name: template-storage
       mountPath: /opt/render/project/src/server/data
       sizeGB: 1
-  - type: static_site
+  - type: static
     name: jira-dashboard-ui
     rootDir: .
     buildCommand: npm install && npm run build
-    publishPath: dist
+    staticPublishPath: dist
     envVars:
       - key: NODE_VERSION
         value: 22.11.0
