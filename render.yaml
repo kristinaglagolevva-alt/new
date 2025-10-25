@@ -3,7 +3,7 @@ services:
     name: jira-dashboard-api
     env: python
     rootDir: server
-    plan: free
+    plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
     envVars:
@@ -18,15 +18,15 @@ services:
     env: node
     rootDir: .
     plan: free
-    buildCommand: npm install && npm run build
+    buildCommand: bash render-build.sh
     startCommand: npx vite preview --host 0.0.0.0 --port 10000
     envVars:
       - key: NODE_VERSION
         value: 22.11.0
-      - key: VITE_BACKEND_URL
+      - key: VITE_BACKEND_HOST
         fromService:
           type: web
           name: jira-dashboard-api
-          property: url
+          property: host
       - key: VITE_OPENAI_API_KEY
         sync: false
