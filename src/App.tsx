@@ -148,6 +148,7 @@ function AuthenticatedApp() {
   );
 
   const activePage: NavigationPage = limitedToDocuments ? 'documents' : currentPage;
+  const selectedProject = projects.find((p) => p.id === currentProject);
 
   const renderPage = () => {
     switch (activePage) {
@@ -168,6 +169,8 @@ function AuthenticatedApp() {
             isJiraConnected={hasConnectedJira}
             onJiraConnect={() => setIsJiraDialogOpen(true)}
             onNavigate={handlePageChange}
+            currentProjectId={currentProject}
+            currentProjectType={selectedProject?.type}
           />
         );
       case 'estimation':
@@ -209,8 +212,6 @@ function AuthenticatedApp() {
         return null;
     }
   };
-
-  const selectedProject = projects.find(p => p.id === currentProject);
 
   const handleJiraConnectionComplete = useCallback(async () => {
     setIsJiraDialogOpen(false);

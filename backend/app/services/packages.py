@@ -159,15 +159,16 @@ class PackageBuilder:
             f"AUTO-{self.payload.period_start.strftime('%Y%m%d')}"
             f"-{self.payload.period_end.strftime('%Y%m%d')}"
         )
-        ta = (
+        ta_query = (
             self.session.query(orm_models.TechAssignmentORM)
             .filter(
                 orm_models.TechAssignmentORM.number == ta_number,
                 orm_models.TechAssignmentORM.period_start == self.payload.period_start,
                 orm_models.TechAssignmentORM.period_end == self.payload.period_end,
             )
-            .one_or_none()
+            .order_by(orm_models.TechAssignmentORM.id.desc())
         )
+        ta = ta_query.first()
         if not ta:
             ta = orm_models.TechAssignmentORM(
                 number=ta_number,

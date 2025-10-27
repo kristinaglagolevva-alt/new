@@ -19,16 +19,171 @@ import {
   Loader2,
 } from 'lucide-react';
 
+type DashboardSummary = {
+  totalProjects: number;
+  connectedProjects: number;
+  totalTasks: number;
+  billableTasks: number;
+  uniquePerformers: number;
+  totalHours: number;
+  lastSyncDate: Date | null;
+  lastSyncLabel: string | null;
+  lastSyncRelative: string | null;
+};
+
+type ChartSlice = { name: string; value: number; hours?: number; tasks?: number };
+type WeeklyActivityPoint = { week: string; hours: number; tasks?: number };
+type TaskStatusSlice = { name: string; value: number; count?: number };
+
+interface ChartsData {
+  projectTime: ChartSlice[];
+  weeklyActivity: WeeklyActivityPoint[];
+  topPerformers: ChartSlice[];
+  taskStatuses: TaskStatusSlice[];
+}
+
+type DemoSummarySeed = Omit<DashboardSummary, 'lastSyncDate' | 'lastSyncLabel' | 'lastSyncRelative'> & {
+  lastSyncISO?: string | null;
+};
+
+interface DemoDashboardMetrics {
+  summary: DemoSummarySeed;
+  charts: ChartsData;
+}
+
+const DEMO_PROJECT_METRICS: Record<string, DemoDashboardMetrics> = {
+  landing: {
+    summary: {
+      totalProjects: 14,
+      connectedProjects: 2,
+      totalTasks: 62,
+      billableTasks: 62,
+      uniquePerformers: 4,
+      totalHours: 320,
+      lastSyncISO: '2025-10-25T08:40:00+03:00',
+    },
+    charts: {
+      projectTime: [
+        { name: 'Разработка лендинга', value: 138, hours: 138, tasks: 24 },
+        { name: 'UX/UI дизайн', value: 96, hours: 96, tasks: 18 },
+        { name: 'Аналитика', value: 48, hours: 48, tasks: 9 },
+        { name: 'QA', value: 38, hours: 38, tasks: 11 },
+      ],
+      weeklyActivity: [
+        { week: '30.09-06.10', hours: 42, tasks: 9 },
+        { week: '07.10-13.10', hours: 48, tasks: 11 },
+        { week: '14.10-20.10', hours: 52, tasks: 12 },
+        { week: '21.10-27.10', hours: 86, tasks: 16 },
+        { week: '28.10-03.11', hours: 92, tasks: 14 },
+      ],
+      topPerformers: [
+        { name: 'Щербаков А.', value: 72, hours: 72, tasks: 12 },
+        { name: 'Кузнецова Е.', value: 68, hours: 68, tasks: 10 },
+        { name: 'Смирнова М.', value: 64, hours: 64, tasks: 11 },
+        { name: 'Данилов Р.', value: 60, hours: 60, tasks: 9 },
+        { name: 'Команда QA', value: 56, hours: 56, tasks: 8 },
+      ],
+      taskStatuses: [
+        { name: 'Done', value: 42, count: 42 },
+        { name: 'In Progress', value: 15, count: 15 },
+        { name: 'To Do', value: 5, count: 5 },
+      ],
+    },
+  },
+  'mobile-app': {
+    summary: {
+      totalProjects: 9,
+      connectedProjects: 3,
+      totalTasks: 124,
+      billableTasks: 97,
+      uniquePerformers: 11,
+      totalHours: 540,
+      lastSyncISO: '2025-10-23T18:20:00+03:00',
+    },
+    charts: {
+      projectTime: [
+        { name: 'Фронтенд', value: 180, hours: 180, tasks: 36 },
+        { name: 'Бэкенд', value: 165, hours: 165, tasks: 31 },
+        { name: 'UX исследования', value: 84, hours: 84, tasks: 18 },
+        { name: 'QA', value: 60, hours: 60, tasks: 16 },
+        { name: 'Управление проектом', value: 51, hours: 51, tasks: 13 },
+      ],
+      weeklyActivity: [
+        { week: '02.09-08.09', hours: 60, tasks: 12 },
+        { week: '09.09-15.09', hours: 72, tasks: 14 },
+        { week: '16.09-22.09', hours: 88, tasks: 18 },
+        { week: '23.09-29.09', hours: 92, tasks: 19 },
+        { week: '30.09-06.10', hours: 108, tasks: 21 },
+        { week: '07.10-13.10', hours: 120, tasks: 22 },
+      ],
+      topPerformers: [
+        { name: 'Команда iOS', value: 120, hours: 120, tasks: 22 },
+        { name: 'Команда Android', value: 118, hours: 118, tasks: 21 },
+        { name: 'Бэкенд-группа', value: 110, hours: 110, tasks: 20 },
+        { name: 'UX/Research', value: 96, hours: 96, tasks: 18 },
+        { name: 'QA команда', value: 96, hours: 96, tasks: 17 },
+      ],
+      taskStatuses: [
+        { name: 'Done', value: 58, count: 58 },
+        { name: 'In Progress', value: 42, count: 42 },
+        { name: 'In Review', value: 16, count: 16 },
+        { name: 'To Do', value: 8, count: 8 },
+      ],
+    },
+  },
+  'crm-integration': {
+    summary: {
+      totalProjects: 7,
+      connectedProjects: 1,
+      totalTasks: 48,
+      billableTasks: 36,
+      uniquePerformers: 6,
+      totalHours: 210,
+      lastSyncISO: '2025-10-20T09:15:00+03:00',
+    },
+    charts: {
+      projectTime: [
+        { name: 'Подключения', value: 82, hours: 82, tasks: 14 },
+        { name: 'Настройка CRM', value: 64, hours: 64, tasks: 12 },
+        { name: 'Синхронизация данных', value: 44, hours: 44, tasks: 11 },
+        { name: 'Обучение команды', value: 20, hours: 20, tasks: 6 },
+      ],
+      weeklyActivity: [
+        { week: '30.09-06.10', hours: 38, tasks: 9 },
+        { week: '07.10-13.10', hours: 48, tasks: 11 },
+        { week: '14.10-20.10', hours: 62, tasks: 14 },
+        { week: '21.10-27.10', hours: 62, tasks: 14 },
+      ],
+      topPerformers: [
+        { name: 'Инженер внедрения', value: 70, hours: 70, tasks: 12 },
+        { name: 'Бизнес-аналитик', value: 56, hours: 56, tasks: 10 },
+        { name: 'CRM архитектор', value: 44, hours: 44, tasks: 9 },
+        { name: 'QA интеграции', value: 40, hours: 40, tasks: 8 },
+      ],
+      taskStatuses: [
+        { name: 'Done', value: 28, count: 28 },
+        { name: 'In Progress', value: 12, count: 12 },
+        { name: 'In Review', value: 6, count: 6 },
+        { name: 'To Do', value: 2, count: 2 },
+      ],
+    },
+  },
+};
+
 interface ManagementDashboardProps {
   isJiraConnected: boolean;
   onJiraConnect: () => void;
   onNavigate?: (page: NavigationPage) => void;
+  currentProjectId?: string;
+  currentProjectType?: string;
 }
 
 export function ManagementDashboard({
   isJiraConnected,
   onJiraConnect,
   onNavigate,
+  currentProjectId,
+  currentProjectType,
 }: ManagementDashboardProps) {
   const {
     trackerProjects,
@@ -63,7 +218,33 @@ export function ManagementDashboard({
     };
   }, [isJiraConnected, loadTasks]);
 
-  const summary = useMemo(() => {
+  const demoMetrics = useMemo(() => {
+    if (currentProjectType !== 'b2b') {
+      return null;
+    }
+    if (!currentProjectId) {
+      return null;
+    }
+    return DEMO_PROJECT_METRICS[currentProjectId] ?? null;
+  }, [currentProjectId, currentProjectType]);
+
+  const summary = useMemo<DashboardSummary>(() => {
+    if (demoMetrics) {
+      const { lastSyncISO, ...rest } = demoMetrics.summary;
+      const lastSyncDate = lastSyncISO ? new Date(lastSyncISO) : null;
+      const lastSyncLabel = lastSyncDate
+        ? new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium', timeStyle: 'short' }).format(lastSyncDate)
+        : null;
+      const lastSyncRelative = lastSyncDate ? formatRelativeTime(lastSyncDate) : null;
+
+      return {
+        ...rest,
+        lastSyncDate,
+        lastSyncLabel,
+        lastSyncRelative,
+      };
+    }
+
     const totalProjects = trackerProjects.length;
     const connectedProjects = trackerProjects.filter((project) => project.status === 'connected').length;
 
@@ -110,9 +291,13 @@ export function ManagementDashboard({
       lastSyncLabel,
       lastSyncRelative,
     };
-  }, [tasks, trackerProjects]);
+  }, [demoMetrics, tasks, trackerProjects]);
 
-  const chartsData = useMemo(() => {
+  const chartsData = useMemo<ChartsData>(() => {
+    if (demoMetrics) {
+      return demoMetrics.charts;
+    }
+
     const projectMap = new Map<string, { hours: number; tasks: number }>();
     const performerMap = new Map<string, { hours: number; tasks: number }>();
     const statusMap = new Map<string, number>();
@@ -197,7 +382,7 @@ export function ManagementDashboard({
       taskStatuses,
       weeklyActivity,
     };
-  }, [tasks, trackerProjects]);
+  }, [demoMetrics, tasks, trackerProjects]);
 
   const checklistItems = useMemo(() => {
     const discoveredCount = trackerProjects.filter((project) => project.status === 'discovered').length;

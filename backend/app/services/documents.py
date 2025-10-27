@@ -17,6 +17,8 @@ try:
     load_dotenv(BASE_DIR / ".env")
     # корневой .env.local (например: /Users/.../Jira Integration Workflow/.env.local)
     load_dotenv(BASE_DIR.parent / ".env.local")
+    # корневой .env
+    load_dotenv(BASE_DIR.parent / ".env")
     # на всякий случай: текущая рабочая директория
     load_dotenv(_Path.cwd() / ".env.local")
     load_dotenv(_Path.cwd() / ".env")
@@ -36,6 +38,7 @@ if OPENAI_API_KEY and OpenAI is not None:
     _openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 from datetime import datetime, date
+from .contracts import ServiceError
 
 
 def _normalize_role_value(value: Any) -> str | None:
@@ -286,6 +289,19 @@ def _shorten(value: str, limit: int = 1500) -> str:
     return (value[:limit] + "…") if len(value) > limit else value
 
 
+def _normalize_bullet_sentence(value: str) -> str:
+    if not value:
+        return ""
+    text = _strip_meta_lines(_strip_html_markup(value))
+    text = re.sub(r"\[[^\]]*\]\s*", "", text)
+    text = re.sub(r"ACS-\d+\s*[—\-:]\s*", "", text, flags=re.I)
+    text = re.sub(r"^[\s\d\.\)\-–—•*]+", "", text)
+    text = re.sub(r"[ \t]+", " ", text).strip()
+    if text and not text.endswith("."):
+        text = f"{text}."
+    return text
+
+
 def _build_plain_act_html(bullets: list[dict[str, object]], *, lang: str) -> str:
     filtered = [
         item
@@ -295,18 +311,45 @@ def _build_plain_act_html(bullets: list[dict[str, object]], *, lang: str) -> str
     if not filtered:
         filtered = bullets
 
-    items_html: list[str] = []
+    sentences: list[str] = []
+    seen = set()
     for bullet in filtered:
         raw = bullet.get("description") or bullet.get("summary") or ""
-        cleaned = _strip_meta_lines(_strip_html_markup(raw))
-        if not cleaned:
+        normalized = _normalize_bullet_sentence(str(raw))
+        if not normalized:
             continue
-        items_html.append(f"<p>{escape(_shorten(cleaned))}</p>")
+        shortened = _shorten(normalized)
+        if shortened in seen:
+            continue
+        seen.add(shortened)
+        sentences.append(shortened)
 
-    if not items_html:
+    if not sentences:
         return ""
 
-    return "\n".join(["<div class=\"doc-template doc-template--act\">", *items_html, "</div>"])
+    limited = sentences[:6]
+    if len(sentences) > 6:
+        limited.append(
+            "Дополнительно выполнены задачи, отражённые в таблице работ."
+            if lang != "en"
+            else "Additional tasks are listed in the work log table."
+        )
+
+    intro = (
+        "During the reporting period the following work was completed:"
+        if lang == "en"
+        else "В отчетный период были выполнены следующие работы:"
+    )
+    body = " ".join(limited)
+
+    return "\n".join(
+        [
+            '<div class="doc-template doc-template--act">',
+            f"<p>{escape(intro)}</p>",
+            f"<p>{escape(body)}</p>",
+            "</div>",
+        ]
+    )
 
 
 def _build_tasks_table(task_snapshots: Iterable[dict]) -> str:
@@ -1379,7 +1422,10 @@ def _generate_gpt_act_text(items: Iterable, payload: DocumentCreateRequest) -> s
 
     gpt_options = getattr(payload, "gptOptions", None)
     if not (_openai_client and gpt_options and getattr(gpt_options, "enabled", False)):
-        return plain_html
+        raise ServiceError(
+            "gpt_disabled",
+            "Не удалось сформировать связный текст акта: GPT отключён или недоступен.",
+        )
 
     candidate_bullets = [b for b in bullets if _strip_meta_lines(_strip_html_markup(b.get("description") or ""))]
     if not candidate_bullets:

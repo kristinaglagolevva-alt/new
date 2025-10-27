@@ -184,6 +184,25 @@ const sanitizeVatRate = (value: unknown): number | null => {
   return Number(Math.max(0, numeric).toFixed(2));
 };
 
+const toStartOfDay = (input: Date) => {
+  const result = new Date(input.getTime());
+  result.setHours(0, 0, 0, 0);
+  return result;
+};
+
+const toEndOfDay = (input: Date) => {
+  const result = new Date(input.getTime());
+  result.setHours(23, 59, 59, 999);
+  return result;
+};
+
+const formatIsoDate = (value: Date) => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 const vatSettingsFromLegacyMode = (
   mode?: ContractUiProfile['default_vat_mode'] | Contract['vatMode'] | null,
 ): VatSettings => {
@@ -472,6 +491,43 @@ const formatHours1Dec = (hours: number) =>
 const formatCurrency = (value: number) =>
   `${value.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`;
 
+const splitTaskSegments = (value?: string | null): string[] => {
+  if (!value) {
+    return [];
+  }
+  return value
+    .replace(/\r/g, '\n')
+    .split(/[\n;]+/)
+    .map((segment) => segment.replace(/^[\s•*+\-–—\d.,)]+/, '').trim())
+    .map((segment) => segment.replace(/^\[[^\]]+\]\s*/g, ''))
+    .map((segment) => segment.replace(/^ACS-\d+\s*—\s*/i, ''))
+    .filter(Boolean);
+};
+
+const buildCompactTaskSummary = (title: string, description?: string | null): string => {
+  const segments = [...splitTaskSegments(title), ...splitTaskSegments(description)];
+  const main = segments.find((segment) => segment.length > 0) ?? title.trim();
+  const normalized = main.replace(/\s+/g, ' ').trim();
+  return normalized.length > 180 ? `${normalized.slice(0, 177)}…` : normalized;
+};
+
+const buildTaskNarrativeFragment = (title: string, description?: string | null): string => {
+  const segments = [...splitTaskSegments(title), ...splitTaskSegments(description)];
+  if (segments.length === 0) {
+    const fallback = title.trim();
+    return fallback ? (fallback.endsWith('.') ? fallback : `${fallback}.`) : '';
+  }
+  const uniqueSegments = Array.from(new Set(segments.map((segment) => segment.replace(/\.+$/, ''))));
+  const [primary, ...rest] = uniqueSegments;
+  if (!primary) {
+    return '';
+  }
+  const additions = rest.slice(0, 2).join('; ');
+  const base = primary.charAt(0).toUpperCase() + primary.slice(1);
+  const fragment = additions ? `${base}: ${additions}` : base;
+  return fragment.endsWith('.') ? fragment : `${fragment}.`;
+};
+
 const resolveIndividualId = (
   contractorId: string | undefined | null,
   taskEmail: string | undefined,
@@ -600,6 +656,7 @@ const resolveDocCodeForTemplate = (
 };
 
 const dateFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+const monthLabelFormatter = new Intl.DateTimeFormat('ru-RU', { month: 'long' });
 
 export function DocumentGenerationDialog({
   open,
@@ -668,6 +725,76 @@ export function DocumentGenerationDialog({
   const [customPeriodRange, setCustomPeriodRange] = useState<DateRange | undefined>();
   const [customPeriodPopoverOpen, setCustomPeriodPopoverOpen] = useState(false);
   const [period, setPeriod] = useState<string>('custom');
+  const customPeriodSummary = useMemo(() => {
+    if (!customPeriodRange?.from) {
+      return '';
+    }
+    const rangeEnd = customPeriodRange.to ?? customPeriodRange.from;
+    return `${dateFormatter.format(customPeriodRange.from)} — ${dateFormatter.format(rangeEnd)}`;
+  }, [customPeriodRange]);
+  const periodRange = useMemo(() => {
+    const createRange = (startInput: Date, endInput: Date) => {
+      const startDate = toStartOfDay(startInput);
+      const endDate = toEndOfDay(endInput);
+      return {
+        startDate,
+        endDate,
+        startValue: formatIsoDate(startDate),
+        endValue: formatIsoDate(endDate),
+      };
+    };
+
+    if (period === 'custom') {
+      if (customPeriodRange?.from) {
+        const toDate = customPeriodRange.to ?? customPeriodRange.from;
+        return createRange(customPeriodRange.from, toDate);
+      }
+      return null;
+    }
+
+    const preset = taskPeriods.find((item) => item.value === period);
+    if (preset?.start && preset?.end) {
+      const start = new Date(preset.start);
+      const end = new Date(preset.end);
+      if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+        return createRange(start, end);
+      }
+    }
+
+    if (typeof period === 'string') {
+      const match = /^([0-9]{4})-([0-9]{2})$/.exec(period);
+      if (match) {
+        const year = Number(match[1]);
+        const monthIndex = Number(match[2]) - 1;
+        if (Number.isFinite(year) && Number.isFinite(monthIndex) && monthIndex >= 0 && monthIndex < 12) {
+          return createRange(new Date(year, monthIndex, 1), new Date(year, monthIndex + 1, 0));
+        }
+      }
+    }
+
+    return null;
+  }, [customPeriodRange, period, taskPeriods]);
+  const filteredTasks = useMemo(() => {
+    if (!periodRange) {
+      return baseTaskList;
+    }
+    const startTime = periodRange.startDate.getTime();
+    const endTime = periodRange.endDate.getTime();
+    if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) {
+      return baseTaskList;
+    }
+    return baseTaskList.filter((task) => {
+      const marker = task.completedAt ?? task.startedAt ?? task.updatedAt ?? task.createdAt ?? null;
+      if (!marker) {
+        return true;
+      }
+      const markerTime = new Date(marker).getTime();
+      if (!Number.isFinite(markerTime)) {
+        return true;
+      }
+      return markerTime >= startTime && markerTime <= endTime;
+    });
+  }, [baseTaskList, periodRange]);
   const [profileMap, setProfileMap] = useState<Record<string, ContractUiProfile | null>>({});
   const [profileLoading, setProfileLoading] = useState(false);
   const [groupOverrides, setGroupOverrides] = useState<Record<string, GroupOverride>>({});
@@ -675,7 +802,7 @@ export function DocumentGenerationDialog({
   const [packagePreview, setPackagePreview] = useState<PackageCreateResponse | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [useGptNarrative, setUseGptNarrative] = useState(false);
+  const [useGptNarrative, setUseGptNarrative] = useState(true);
 
   const contractsById = useMemo(() => {
     const map = new Map<string, Contract>();
@@ -756,24 +883,35 @@ export function DocumentGenerationDialog({
     },
     [allPerformerIds],
   );
+  const handleCustomRangeSelect = useCallback((range?: DateRange) => {
+    if (!range?.from) {
+      setCustomPeriodRange(undefined);
+      return;
+    }
+    const nextRange: DateRange = {
+      from: range.from,
+      to: range.to ?? range.from,
+    };
+    setCustomPeriodRange(nextRange);
+  }, []);
 
   const selectedTasks = useMemo(() => {
     if (isBulkDocumentsMode) {
       if (selectedPerformerIds === 'all') {
-        return baseTaskList;
+        return filteredTasks;
       }
       const selectedSet = new Set(selectedPerformerIds);
       if (selectedSet.size === 0) {
         return [];
       }
-      return baseTaskList.filter((task) => {
+      return filteredTasks.filter((task) => {
         const contract = task.contractId ? contractsById.get(task.contractId) ?? null : null;
         const performerId = task.contractorId ?? contract?.contractorId ?? null;
         return performerId !== null && selectedSet.has(performerId);
       });
     }
-    return baseTaskList;
-  }, [baseTaskList, contractsById, isBulkDocumentsMode, selectedPerformerIds]);
+    return filteredTasks;
+  }, [contractsById, filteredTasks, isBulkDocumentsMode, selectedPerformerIds]);
 
   const contractsByPerformerId = useMemo(() => {
     const map = new Map<string, Contract[]>();
@@ -800,20 +938,68 @@ export function DocumentGenerationDialog({
   }, [legalEntities]);
 
   const periodOptions = useMemo(() => {
+    const capitalize = (value: string) => (value ? value.charAt(0).toUpperCase() + value.slice(1) : value);
+    const buildDescription = (start: Date, end: Date) => `${dateFormatter.format(start)} — ${dateFormatter.format(end)}`;
+    const createMonthlyOption = (reference: Date) => {
+      const start = new Date(reference.getFullYear(), reference.getMonth(), 1);
+      const end = new Date(reference.getFullYear(), reference.getMonth() + 1, 0);
+      const value = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`;
+      return {
+        value,
+        label: capitalize(monthLabelFormatter.format(reference)),
+        description: buildDescription(start, end),
+      };
+    };
+    const parseMonthLabel = (value: string, fallback?: string | null) => {
+      const match = /^(\d{4})-(\d{2})$/.exec(value);
+      if (!match) {
+        return fallback ?? value;
+      }
+      const year = Number(match[1]);
+      const monthIndex = Number(match[2]) - 1;
+      if (!Number.isFinite(year) || !Number.isFinite(monthIndex)) {
+        return fallback ?? value;
+      }
+      return capitalize(monthLabelFormatter.format(new Date(year, monthIndex, 1)));
+    };
+    const dedup = new Map<string, { value: string; label: string; description?: string }>();
+    const pushOption = (option: { value: string; label: string; description?: string }) => {
+      if (!option.value || dedup.has(option.value)) {
+        return;
+      }
+      dedup.set(option.value, option);
+    };
+
     if (taskPeriods.length === 0) {
-      return [
-        {
-          value: 'custom',
-          label: 'Текущий месяц',
-          description: 'Укажите даты вручную',
-        },
-      ];
+      const now = new Date();
+      pushOption(createMonthlyOption(now));
+      pushOption(createMonthlyOption(new Date(now.getFullYear(), now.getMonth() - 1, 1)));
+      pushOption(createMonthlyOption(new Date(now.getFullYear(), now.getMonth() - 2, 1)));
+    } else {
+      taskPeriods.forEach((period) => {
+        if (!period?.value) {
+          return;
+        }
+        const startDate = period.start ? new Date(period.start) : null;
+        const endDate = period.end ? new Date(period.end) : null;
+        const hasValidDates =
+          startDate instanceof Date && !Number.isNaN(startDate.getTime()) &&
+          endDate instanceof Date && !Number.isNaN(endDate.getTime());
+        const label = hasValidDates && startDate
+          ? capitalize(monthLabelFormatter.format(startDate))
+          : parseMonthLabel(period.value, period.label);
+        const description = hasValidDates && startDate && endDate
+          ? buildDescription(startDate, endDate)
+          : period.label ?? period.value;
+        pushOption({
+          value: period.value,
+          label,
+          description,
+        });
+      });
     }
-    return taskPeriods.map((p) => ({
-      value: p.value,
-      label: p.label,
-      description: `${p.start} — ${p.end}`,
-    }));
+
+    return Array.from(dedup.values());
   }, [taskPeriods]);
 
   const fallbackPeriod = periodOptions[0]?.value ?? 'custom';
@@ -830,7 +1016,7 @@ export function DocumentGenerationDialog({
       setFormError(null);
       setSelectedPerformerIds('all');
       setPerformerSelectorOpen(false);
-      setUseGptNarrative(false);
+      setUseGptNarrative(true);
       return;
     }
     if (defaultPeriod && defaultPeriod !== 'all' && periodOptions.some((option) => option.value === defaultPeriod)) {
@@ -1311,35 +1497,40 @@ export function DocumentGenerationDialog({
   const totalTasks = selectedTasks.length;
 
   const resolvePeriodBoundaries = useCallback(() => {
-    if (period === 'custom' && customPeriodRange?.from && customPeriodRange?.to) {
-      const toIso = (date: Date) => date.toISOString().slice(0, 10);
-      return { start: toIso(customPeriodRange.from), end: toIso(customPeriodRange.to) };
+    if (periodRange) {
+      return { start: periodRange.startValue, end: periodRange.endValue };
     }
+
     const preset = taskPeriods.find((item) => item.value === period);
     if (preset?.start && preset?.end) {
       return { start: preset.start, end: preset.end };
     }
-    if (typeof period === 'string') {
-      const match = /^([0-9]{4})-([0-9]{2})$/.exec(period);
-      if (match) {
-        const year = Number(match[1]);
-        const monthIndex = Number(match[2]) - 1;
-        if (Number.isFinite(year) && Number.isFinite(monthIndex) && monthIndex >= 0 && monthIndex < 12) {
-          const start = new Date(Date.UTC(year, monthIndex, 1));
-          const end = new Date(Date.UTC(year, monthIndex + 1, 0));
-          const toIso = (date: Date) => date.toISOString().slice(0, 10);
-          return { start: toIso(start), end: toIso(end) };
-        }
+
+    const timestamps: number[] = [];
+    selectedTasks.forEach((task) => {
+      const marker = task.completedAt ?? task.startedAt ?? task.updatedAt ?? task.createdAt ?? null;
+      if (!marker) {
+        return;
       }
+      const markerDate = new Date(marker);
+      if (!Number.isNaN(markerDate.getTime())) {
+        timestamps.push(markerDate.getTime());
+      }
+    });
+    if (timestamps.length > 0) {
+      const startDate = toStartOfDay(new Date(Math.min(...timestamps)));
+      const endDate = toEndOfDay(new Date(Math.max(...timestamps)));
+      return { start: formatIsoDate(startDate), end: formatIsoDate(endDate) };
     }
+
     const today = new Date();
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    const startOfMonth = toStartOfDay(new Date(today.getFullYear(), today.getMonth(), 1));
+    const endOfMonth = toEndOfDay(new Date(today.getFullYear(), today.getMonth() + 1, 0));
     return {
-      start: startOfMonth.toISOString().slice(0, 10),
-      end: endOfMonth.toISOString().slice(0, 10),
+      start: formatIsoDate(startOfMonth),
+      end: formatIsoDate(endOfMonth),
     };
-  }, [period, customPeriodRange, taskPeriods]);
+  }, [period, periodRange, selectedTasks, taskPeriods]);
 
   const groupSummaries = useMemo(() => {
     return groupMatrix.map((group) => {
@@ -1523,10 +1714,13 @@ export function DocumentGenerationDialog({
     let includeTimesheets = false;
     const templatesOption: Record<string, string> = {};
     const tasksPayload: PackageTaskInput[] = [];
+    const narrativeChunks: string[] = [];
+    const narrativeFacts = new Set<string>();
 
     groupSummaries.forEach((summary) => {
       const { group, docs, rate, timesheet, vatModeLegacy, vatSettings, vatPercent, override } = summary;
       includeTimesheets = includeTimesheets || Boolean(timesheet);
+      const groupNarrativeFragments: string[] = [];
 
       const templateSource = override?.templates ?? group.templatesByDoc;
       docs.forEach((doc) => {
@@ -1544,6 +1738,14 @@ export function DocumentGenerationDialog({
       const normalizedVatRate = vatSettings.status === 'payer' ? sanitizeVatRate(vatSettings.rate) : null;
 
       summary.group.tasks.forEach((task) => {
+        const compactSummary = buildCompactTaskSummary(task.title, task.description);
+        const narrativeFragment = buildTaskNarrativeFragment(task.title, task.description);
+        if (narrativeFragment) {
+          groupNarrativeFragments.push(narrativeFragment);
+        }
+        if (compactSummary) {
+          narrativeFacts.add(compactSummary.replace(/\.+$/u, '').trim());
+        }
         const performerId = resolveIndividualId(
           task.contractorId,
           task.assigneeEmail,
@@ -1574,8 +1776,7 @@ export function DocumentGenerationDialog({
           task_id: task.id,
           billable: task.billable,
           force_included: task.forceIncluded,
-          summary: task.title,
-          description: task.description ?? undefined,
+          summary: compactSummary,
           status: task.status,
           assignee: task.assigneeDisplayName ?? undefined,
           email: task.assigneeEmail ?? undefined,
@@ -1600,6 +1801,20 @@ export function DocumentGenerationDialog({
         };
         tasksPayload.push(payload);
       });
+
+      const uniqueFragments = Array.from(new Set(groupNarrativeFragments.map((fragment) => fragment.replace(/\s+/g, ' ').trim()))).filter(Boolean);
+      if (uniqueFragments.length > 0) {
+        const limitedFragments = uniqueFragments.slice(0, 3).map((fragment) => fragment.replace(/[.;\s]+$/u, ''));
+        const projectLabel =
+          summary.group.projectName ||
+          summary.group.projectKey ||
+          summary.group.contract?.number ||
+          summary.group.contract?.id ||
+          'проект';
+        const performerLabel = summary.group.performer ? describePerformer(summary.group.performer, summary.group.performerType) : null;
+        const performerClause = performerLabel ? ` исполнителя ${performerLabel}` : '';
+        narrativeChunks.push(`По проекту ${projectLabel}${performerClause} выполнены задачи: ${limitedFragments.join('; ')}.`);
+      }
     });
 
     const primaryGroup = groupSummaries[0];
@@ -1640,10 +1855,47 @@ export function DocumentGenerationDialog({
     }
 
     if (useGptNarrative) {
+      const periodStartDate = new Date(`${periodStart}T00:00:00`);
+      const periodEndDate = new Date(`${periodEnd}T00:00:00`);
+      const startLabel = Number.isNaN(periodStartDate.getTime()) ? periodStart : dateFormatter.format(periodStartDate);
+      const endLabel = Number.isNaN(periodEndDate.getTime()) ? periodEnd : dateFormatter.format(periodEndDate);
+      const totalHoursValue = groupSummaries.reduce((sum, summary) => sum + summary.group.totalHours, 0);
+      const totalAmountValue = groupSummaries.reduce((sum, summary) => sum + summary.amount, 0);
+      const totalTasksCount = groupSummaries.reduce((sum, summary) => sum + summary.group.tasks.length, 0);
+      const condensedNarrative = (() => {
+        if (narrativeChunks.length === 0) {
+          return '';
+        }
+        const limited = narrativeChunks.slice(0, 4);
+        if (narrativeChunks.length > 4) {
+          limited.push(`Дополнительно закрыты ещё ${narrativeChunks.length - 4} направлений, отражённых в таблице работ.`);
+        }
+        return limited.join(' ');
+      })();
+      const factListForPrompt = (() => {
+        if (narrativeFacts.size === 0) {
+          return '';
+        }
+        const items = Array.from(narrativeFacts).slice(0, 12);
+        return items
+          .map((fact, index) => `${index + 1}) ${fact}`)
+          .join(' ');
+      })();
+      const gptExtraNotes = [
+        `Период отчёта: ${startLabel} — ${endLabel}.`,
+        `Всего задач: ${totalTasksCount}. Отработано ${formatHours1Dec(totalHoursValue)} часов. Сумма к закрытию: ${formatCurrency(totalAmountValue)}.`,
+        condensedNarrative ? `Контекст работ: ${condensedNarrative}` : '',
+        factListForPrompt ? `Факты для описания: ${factListForPrompt}` : '',
+        `Сформируй финальный текст максимум из шести предложений. Начни с фразы "С ${startLabel} по ${endLabel}..." и опиши ключевые результаты.`,
+        'Не используй списки, маркировку, нумерацию или дословные перечни задач в финальном тексте. Объедини работы по смыслу и заверши абзац предложением с суммарными часами и стоимостью.',
+      ]
+        .filter(Boolean)
+        .join(' ');
       requestOptions.gpt = {
         enabled: true,
         language: 'ru',
-        style: 'neutral',
+        style: 'concise',
+        extraNotes: gptExtraNotes,
       };
     }
 
@@ -2058,7 +2310,14 @@ export function DocumentGenerationDialog({
                             </div>
                           </SelectItem>
                         ))}
-                        <SelectItem value="custom">Выбрать вручную</SelectItem>
+                        <SelectItem value="custom">
+                          <div>
+                            <p className="text-sm font-medium">Настраиваемый период</p>
+                            <p className="text-xs text-gray-500">
+                              {customPeriodSummary || 'Выберите даты вручную'}
+                            </p>
+                          </div>
+                        </SelectItem>
                       </SelectContent>
                     </Select>
                     {period === 'custom' && (
@@ -2066,9 +2325,7 @@ export function DocumentGenerationDialog({
                         <PopoverTrigger asChild>
                           <Button variant="outline" className="mt-2 w-full justify-start">
                             <CalendarRange className="mr-2 h-4 w-4" />
-                            {customPeriodRange?.from && customPeriodRange?.to
-                              ? `${dateFormatter.format(customPeriodRange.from)} — ${dateFormatter.format(customPeriodRange.to)}`
-                              : 'Укажите даты'}
+                            {customPeriodSummary || 'Диапазон'}
                           </Button>
                         </PopoverTrigger>
                         <PopoverContent className="w-auto p-0" align="start">
@@ -2077,18 +2334,49 @@ export function DocumentGenerationDialog({
                             mode="range"
                             defaultMonth={customPeriodRange?.from}
                             selected={customPeriodRange}
-                            onSelect={(range) => {
-                              setCustomPeriodRange(range ?? undefined);
-                              if (range?.from && range?.to) {
-                                setCustomPeriodPopoverOpen(false);
-                              }
-                            }}
-                            numberOfMonths={2}
+                            onSelect={handleCustomRangeSelect}
+                            numberOfMonths={1}
                           />
+                          <div className="flex items-center justify-between gap-2 border-t p-3">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setCustomPeriodRange(undefined);
+                                setPeriod(fallbackPeriod);
+                                setCustomPeriodPopoverOpen(false);
+                              }}
+                            >
+                              Сбросить
+                            </Button>
+                            <Button
+                              size="sm"
+                              disabled={!customPeriodRange?.from}
+                              onClick={() => {
+                                if (customPeriodRange?.from) {
+                                  setPeriod('custom');
+                                  setCustomPeriodPopoverOpen(false);
+                                }
+                              }}
+                            >
+                              Применить
+                            </Button>
+                          </div>
                         </PopoverContent>
                       </Popover>
                     )}
                   </div>
+                  {filteredTasks.length === 0 && (
+                    <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0 text-red-600" />
+                      <div>
+                        <p className="text-sm font-medium text-red-800">Нет задач за выбранный период</p>
+                        <p className="text-[11px] leading-relaxed">
+                          Измените период или снимите фильтры, иначе документы не сформируются.
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
               <div className="rounded-lg border border-gray-200 bg-white p-3">
@@ -2448,13 +2736,10 @@ export function DocumentGenerationDialog({
                     <p className="text-xs text-gray-500">Задач нет</p>
                   ) : (
                     activeGroup.tasks.map((task) => (
-                      <div key={task.id} className="space-y-1 rounded-md border border-gray-300 bg-white p-2">
+                      <div key={task.id} className="rounded-md border border-gray-300 bg-white p-2">
                         <div className="text-sm font-medium text-gray-900">
                           {task.key ? `${task.key} — ${task.title}` : task.title}
                         </div>
-                        <p className="text-xs text-gray-600 whitespace-pre-wrap line-clamp-2">
-                          {task.description?.trim() || 'Описание в Jira отсутствует'}
-                        </p>
                       </div>
                     ))
                   )}

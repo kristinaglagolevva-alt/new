@@ -45,6 +45,24 @@ const TEMPLATE_PRESET_KEYWORDS: Record<'base' | Contract['performerType'], strin
   company: [['сдачи', 'юл']],
 };
 
+const digitsOnly = (input: string | null | undefined, length?: number) => {
+  const digits = (input ?? '').replace(/\D/g, '');
+  return typeof length === 'number' ? digits.slice(0, length) : digits;
+};
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+type LegalEntityFormErrors = {
+  inn?: string;
+  kpp?: string;
+};
+
+type IndividualFormErrors = {
+  inn?: string;
+  passport?: string;
+  email?: string;
+};
+
 const suggestTemplatesForPerformer = (
   performerType: Contract['performerType'] | undefined,
   availableTemplates: Template[] | null | undefined
@@ -1054,6 +1072,8 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
       return {
         ...defaultLegalEntity,
         ...source,
+        inn: digitsOnly(source.inn, 10),
+        kpp: digitsOnly(source.kpp, 9),
         powerOfAttorneyNumber: source.powerOfAttorneyNumber ?? '',
         powerOfAttorneyDate: source.powerOfAttorneyDate ?? null,
         defaultVatSettings: normalizedVat,
@@ -1062,10 +1082,21 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
     };
 
     const [form, setForm] = useState<LegalEntity>(buildInitialLegalForm(entity ?? null));
+    const [errors, setErrors] = useState<LegalEntityFormErrors>({});
     const basisPresets = ['Устава', 'Доверенность'];
     const [basisMode, setBasisMode] = useState<'preset' | 'custom'>(
       entity && entity.basis && !basisPresets.includes(entity.basis) ? 'custom' : 'preset'
     );
+    const clearError = (field: keyof LegalEntityFormErrors) => {
+      setErrors((prev) => {
+        if (!prev[field]) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+    };
     const requiresPowerOfAttorneyDetails = useMemo(() => {
       const normalized = (form.basis ?? '').trim().toLowerCase();
       return normalized.includes('довер');
@@ -1089,6 +1120,7 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
     useEffect(() => {
       setForm(buildInitialLegalForm(entity ?? null));
       setBasisMode(entity && entity.basis && !basisPresets.includes(entity.basis) ? 'custom' : 'preset');
+      setErrors({});
     }, [entity]);
 
     const handleOpenChange = (open: boolean) => {
@@ -1097,13 +1129,28 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
       } else {
         setLegalDialog({ open: false, entity: null });
         setForm({ ...defaultLegalEntity });
+        setErrors({});
       }
     };
 
     const handleSave = async () => {
+      const normalizedVat = normalizeVatSettings(form.defaultVatSettings);
+      const basisValue = (form.basis ?? '').trim().toLowerCase();
+      const innDigits = digitsOnly(form.inn, 10);
+      const kppDigits = digitsOnly(form.kpp, 9);
+      const validationErrors: LegalEntityFormErrors = {};
+      if (innDigits.length !== 10) {
+        validationErrors.inn = 'ИНН ЮЛ должен содержать 10 цифр';
+      }
+      if (kppDigits.length !== 9) {
+        validationErrors.kpp = 'КПП должен содержать 9 цифр';
+      }
+      if (Object.keys(validationErrors).length > 0) {
+        setErrors(validationErrors);
+        return;
+      }
+      setErrors({});
       try {
-        const normalizedVat = normalizeVatSettings(form.defaultVatSettings);
-        const basisValue = (form.basis ?? '').trim().toLowerCase();
         const trimOrNull = (value: string | null | undefined) => {
           if (!value) {
             return null;
@@ -1114,6 +1161,8 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
         const shouldIncludePowerOfAttorney = basisValue.includes('довер');
         await saveLegalEntity({
           ...form,
+          inn: innDigits,
+          kpp: kppDigits,
           basis: form.basis?.trim() ?? '',
           powerOfAttorneyNumber: shouldIncludePowerOfAttorney ? trimOrNull(form.powerOfAttorneyNumber) : null,
           powerOfAttorneyDate: shouldIncludePowerOfAttorney ? trimOrNull(form.powerOfAttorneyDate) : null,
@@ -1161,11 +1210,35 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <Label>ИНН</Label>
-                  <Input value={form.inn} onChange={(event) => setForm((prev) => ({ ...prev, inn: event.target.value }))} placeholder="1234567890" />
+                  <Input
+                    inputMode="numeric"
+                    maxLength={10}
+                    aria-invalid={Boolean(errors.inn)}
+                    value={form.inn}
+                    onChange={(event) => {
+                      const digits = digitsOnly(event.target.value, 10);
+                      setForm((prev) => ({ ...prev, inn: digits }));
+                      clearError('inn');
+                    }}
+                    placeholder="1234567890"
+                  />
+                  {errors.inn ? <p className="mt-1 text-xs text-destructive">{errors.inn}</p> : null}
                 </div>
                 <div>
                   <Label>КПП</Label>
-                  <Input value={form.kpp} onChange={(event) => setForm((prev) => ({ ...prev, kpp: event.target.value }))} placeholder="123456789" />
+                  <Input
+                    inputMode="numeric"
+                    maxLength={9}
+                    aria-invalid={Boolean(errors.kpp)}
+                    value={form.kpp}
+                    onChange={(event) => {
+                      const digits = digitsOnly(event.target.value, 9);
+                      setForm((prev) => ({ ...prev, kpp: digits }));
+                      clearError('kpp');
+                    }}
+                    placeholder="123456789"
+                  />
+                  {errors.kpp ? <p className="mt-1 text-xs text-destructive">{errors.kpp}</p> : null}
                 </div>
               </div>
               <div>
@@ -1283,7 +1356,31 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
 
   const IndividualFormDialog = () => {
     const item = individualDialog.individual;
-    const [form, setForm] = useState<Individual>(item ? { ...item } : { ...defaultIndividual });
+    const [form, setForm] = useState<Individual>(() => {
+      if (!item) {
+        return { ...defaultIndividual };
+      }
+      const base = { ...defaultIndividual, ...item };
+      const expectedPassportLength = base.taxResidencyStatus === 'non_resident' ? 9 : 10;
+      return {
+        ...base,
+        inn: digitsOnly(base.inn, 12),
+        passport: digitsOnly(base.passport, expectedPassportLength),
+        email: base.email ?? '',
+        address: base.address ?? '',
+      };
+    });
+    const [errors, setErrors] = useState<IndividualFormErrors>({});
+    const clearError = (field: keyof IndividualFormErrors) => {
+      setErrors((prev) => {
+        if (!prev[field]) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+    };
     const dialogIndividualId = item?.id ?? '';
     const managerCandidates = useMemo(() => {
       const currentId = form.id || dialogIndividualId;
@@ -1305,22 +1402,79 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
       return filtered.sort((a, b) => (a.name || a.email || '').localeCompare(b.name || b.email || '', 'ru'));
     }, [individuals, form.id, form.approvalManagerId, dialogIndividualId]);
 
+    const passportMaxLength = form.taxResidencyStatus === 'non_resident' ? 9 : 10;
+    const passportPlaceholder = passportMaxLength === 9 ? '123456789' : '1234567890';
+
     useEffect(() => {
-      setForm(item ? { ...item } : { ...defaultIndividual });
+      if (item) {
+        const base = { ...defaultIndividual, ...item };
+        const expectedPassportLength = base.taxResidencyStatus === 'non_resident' ? 9 : 10;
+        setForm({
+          ...base,
+          inn: digitsOnly(base.inn, 12),
+          passport: digitsOnly(base.passport, expectedPassportLength),
+          email: base.email ?? '',
+          address: base.address ?? '',
+        });
+      } else {
+        setForm({ ...defaultIndividual });
+      }
+      setErrors({});
     }, [item]);
 
     const handleOpenChange = (open: boolean) => {
       if (open) {
+        setErrors({});
         setIndividualDialog((prev) => ({ ...prev, open: true }));
       } else {
         setIndividualDialog({ open: false, individual: null });
         setForm({ ...defaultIndividual });
+        setErrors({});
       }
     };
 
     const handleSave = async () => {
+      const innDigits = digitsOnly(form.inn, 12);
+      const residency = form.taxResidencyStatus === 'non_resident'
+        ? 'non_resident'
+        : form.taxResidencyStatus === 'resident'
+          ? 'resident'
+          : 'unknown';
+      const expectedPassportLength = residency === 'non_resident' ? 9 : 10;
+      const passportDigits = digitsOnly(form.passport, expectedPassportLength);
+      const email = (form.email ?? '').trim();
+      const validationErrors: IndividualFormErrors = {};
+
+      if (innDigits.length !== 12) {
+        validationErrors.inn = 'ИНН ФЛ должен содержать 12 цифр';
+      }
+      if (passportDigits.length !== expectedPassportLength) {
+        validationErrors.passport =
+          residency === 'non_resident'
+            ? 'Паспорт нерезидента должен содержать 9 цифр'
+            : residency === 'resident'
+              ? 'Паспорт гражданина РФ должен содержать 10 цифр'
+              : 'Укажите 10 цифр или выберите статус нерезидента для паспорта из 9 цифр';
+      }
+      if (!email) {
+        validationErrors.email = 'Укажите email';
+      } else if (!EMAIL_REGEX.test(email)) {
+        validationErrors.email = 'Email должен быть в формате name@example.com';
+      }
+
+      if (Object.keys(validationErrors).length > 0) {
+        setErrors(validationErrors);
+        return;
+      }
+
+      setErrors({});
       try {
-        const saved = await saveIndividual(form);
+        const saved = await saveIndividual({
+          ...form,
+          inn: innDigits,
+          passport: passportDigits,
+          email,
+        });
         if (saved.generatedPassword) {
           window.alert(
             `Создан новый аккаунт или пароль для пользователя:\n${saved.generatedPassword}\nПередайте его исполнителю безопасным способом.`
@@ -1378,7 +1532,15 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
                   <Label>Статус налогового резидентства</Label>
                   <Select
                     value={form.taxResidencyStatus ?? 'unknown'}
-                    onValueChange={(value) => setForm((prev) => ({ ...prev, taxResidencyStatus: value as Individual['taxResidencyStatus'] }))}
+                    onValueChange={(value) => {
+                      const nextStatus = value as Individual['taxResidencyStatus'];
+                      clearError('passport');
+                      setForm((prev) => ({
+                        ...prev,
+                        taxResidencyStatus: nextStatus,
+                        passport: digitsOnly(prev.passport, nextStatus === 'non_resident' ? 9 : 10),
+                      }));
+                    }}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Выберите статус" />
@@ -1453,11 +1615,35 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
               ) : null}
               <div>
                 <Label>ИНН</Label>
-                <Input value={form.inn} onChange={(event) => setForm((prev) => ({ ...prev, inn: event.target.value }))} placeholder="123456789012" />
+                <Input
+                  inputMode="numeric"
+                  maxLength={12}
+                  aria-invalid={Boolean(errors.inn)}
+                  value={form.inn}
+                  onChange={(event) => {
+                    const digits = digitsOnly(event.target.value, 12);
+                    setForm((prev) => ({ ...prev, inn: digits }));
+                    clearError('inn');
+                  }}
+                  placeholder="123456789012"
+                />
+                {errors.inn ? <p className="mt-1 text-xs text-destructive">{errors.inn}</p> : null}
               </div>
               <div>
                 <Label>Паспорт</Label>
-                <Input value={form.passport} onChange={(event) => setForm((prev) => ({ ...prev, passport: event.target.value }))} placeholder="1234 567890" />
+                <Input
+                  inputMode="numeric"
+                  maxLength={passportMaxLength}
+                  aria-invalid={Boolean(errors.passport)}
+                  value={form.passport}
+                  onChange={(event) => {
+                    const digits = digitsOnly(event.target.value, passportMaxLength);
+                    setForm((prev) => ({ ...prev, passport: digits }));
+                    clearError('passport');
+                  }}
+                  placeholder={passportPlaceholder}
+                />
+                {errors.passport ? <p className="mt-1 text-xs text-destructive">{errors.passport}</p> : null}
               </div>
               <div>
                 <Label>Адрес регистрации</Label>
@@ -1467,10 +1653,15 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
                 <Label>Email</Label>
                 <Input
                   type="email"
+                  aria-invalid={Boolean(errors.email)}
                   value={form.email}
-                  onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
+                  onChange={(event) => {
+                    setForm((prev) => ({ ...prev, email: event.target.value }));
+                    clearError('email');
+                  }}
                   placeholder="contractor@example.com"
                 />
+                {errors.email ? <p className="mt-1 text-xs text-destructive">{errors.email}</p> : null}
               </div>
             </div>
 

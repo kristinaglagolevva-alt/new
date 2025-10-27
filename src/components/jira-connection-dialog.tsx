@@ -400,9 +400,11 @@ export function JiraConnectionDialog({ open, onOpenChange, onConnectionComplete 
                 {importedProjects.length > 1 ? 'Импорт завершён' : 'Проект подключен'}
               </h3>
               <p className="text-sm text-muted-foreground">
-                {importedProjects.length > 1
-                  ? `Импортированы ${importedProjects.length} проекта(ов). Можно перейти к задачам и проверке перед биллингом.`
-                  : 'Данные успешно импортированы. Можно перейти к задачам и проверке перед биллингом.'}
+                {importedProjects.length > 1 ? (
+                  `Импортированы ${importedProjects.length} проекта(ов). Можно перейти к задачам и проверке перед биллингом.`
+                ) : (
+                  'Данные успешно импортированы. Можно перейти к задачам и проверке перед биллингом.'
+                )}
               </p>
               {importSummary && (
                 <div className="text-sm text-left bg-slate-50 border border-slate-200 rounded-lg p-3">
