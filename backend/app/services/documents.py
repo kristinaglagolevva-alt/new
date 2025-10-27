@@ -342,11 +342,11 @@ def _build_plain_act_html(bullets: list[dict[str, object]], *, lang: str) -> str
     )
     body = " ".join(limited)
 
+    combined = f"{intro} {body}".strip()
     return "\n".join(
         [
             '<div class="doc-template doc-template--act">',
-            f"<p>{escape(intro)}</p>",
-            f"<p>{escape(body)}</p>",
+            f"<p>{escape(combined)}</p>",
             "</div>",
         ]
     )

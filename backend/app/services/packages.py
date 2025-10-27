@@ -1065,6 +1065,7 @@ class PackageBuilder:
             html = _generate_gpt_act_text(items, payload)
             paragraphs = self._html_to_paragraphs(html)
             if paragraphs:
+                paragraphs[0] = paragraphs[0].replace("\n", " ").strip()
                 return paragraphs
 
         return self._build_default_paragraphs(items)
@@ -1215,6 +1216,11 @@ class PackageBuilder:
                     if paragraph and paragraph.strip()
                 ]
                 html_body = "\n".join(f"<p>{p}</p>" for p in normalized_paragraphs)
+                combined_html = ""
+                if normalized_paragraphs:
+                    combined_text = " ".join(normalized_paragraphs)
+                    combined_html = f"<p>{escape(combined_text)}</p>"
+                effective_html = combined_html or html_body
 
                 contract = plan.contract
                 company = contract.company if hasattr(contract, "company") else None
@@ -1224,9 +1230,9 @@ class PackageBuilder:
                 task_meta = first_task.raw_meta if first_task else {}
 
                 context = {
-                    "gptBody": html_body,
-                    "tableTasks": html_body,
-                    "table2": html_body,
+                    "gptBody": effective_html,
+                    "tableTasks": effective_html,
+                    "table2": effective_html,
                     "startPeriodDate": f"{self.payload.period_start:%d.%m.%Y}",
                     "endPeriodDate": f"{self.payload.period_end:%d.%m.%Y}",
                     "totalHours": _format_hours(float(plan.hours)) if plan.hours is not None else "0",
@@ -1309,11 +1315,10 @@ class PackageBuilder:
                 if contractor_company_name:
                     context.setdefault("contractorCompanyName", contractor_company_name)
 
-                bullet_body = ''.join(f'<li>{escape(p)}</li>' for p in normalized_paragraphs)
-                if bullet_body and not context.get("bodygpt"):
-                    context["bodygpt"] = f"<ol>{bullet_body}</ol>"
-                elif html_body and not context.get("bodygpt"):
-                    context["bodygpt"] = html_body
+                if combined_html and not context.get("bodygpt"):
+                    context["bodygpt"] = combined_html
+                elif effective_html and not context.get("bodygpt"):
+                    context["bodygpt"] = effective_html
 
                 table_rows_html = self._build_tasks_table_rows(plan)
                 if table_rows_html:
