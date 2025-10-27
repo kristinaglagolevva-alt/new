@@ -12,14 +12,20 @@ from .migrations import run_migrations
 
 DATABASE_URL = settings.database_url
 
-connect_args = {}
-if DATABASE_URL.startswith("sqlite"):
+connect_args: dict[str, object] = {}
+engine_url = DATABASE_URL
+
+if engine_url.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
     # Ensure directory exists for SQLite db
-    db_path = DATABASE_URL.replace("sqlite:///", "")
+    db_path = engine_url.replace("sqlite:///", "")
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+elif engine_url.startswith("postgres://"):
+    engine_url = engine_url.replace("postgres://", "postgresql+psycopg://", 1)
+elif engine_url.startswith("postgresql://"):
+    engine_url = engine_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
-engine = create_engine(DATABASE_URL, connect_args=connect_args, future=True)
+engine = create_engine(engine_url, connect_args=connect_args, future=True)
 
 
 class WorkspaceSession(SessionBase):
