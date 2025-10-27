@@ -1172,20 +1172,20 @@ class PackageBuilder:
 
             rows.append(
                 "<tr>"
-                f"<td><p>{escape(title)}</p></td>"
-                f"<td><p>{escape(hours_label)}</p></td>"
-                f"<td><p>{escape(rate_label)}</p></td>"
-                f"<td><p>{escape(amount_label)}</p></td>"
+                f"<td><p style=\"text-align:left; margin:0;\">{escape(title)}</p></td>"
+                f"<td><p style=\"text-align:left; margin:0;\">{escape(hours_label)}</p></td>"
+                f"<td><p style=\"text-align:left; margin:0;\">{escape(rate_label)}</p></td>"
+                f"<td><p style=\"text-align:left; margin:0;\">{escape(amount_label)}</p></td>"
                 "</tr>"
             )
 
         if not rows:
             rows.append(
                 "<tr>"
-                "<td><p>—</p></td>"
-                "<td><p>—</p></td>"
-                "<td><p>—</p></td>"
-                "<td><p>—</p></td>"
+                "<td><p style=\"text-align:left; margin:0;\">—</p></td>"
+                "<td><p style=\"text-align:left; margin:0;\">—</p></td>"
+                "<td><p style=\"text-align:left; margin:0;\">—</p></td>"
+                "<td><p style=\"text-align:left; margin:0;\">—</p></td>"
                 "</tr>"
             )
 

@@ -216,6 +216,17 @@ const workPackageToCsv = (packages: WorkPackage[]): string => {
     .join('\n');
 };
 
+const downloadFile = (content: string, mimeType: string, fileName: string) => {
+  const blob = new Blob([content], { type: mimeType });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+};
+
 interface DocumentsPageProps {
   onNavigate?: (page: NavigationPage) => void;
   onDirectoryFocusRequested?: (focus: DirectoryFocus) => void;
