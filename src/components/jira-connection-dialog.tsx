@@ -197,8 +197,11 @@ export function JiraConnectionDialog({ open, onOpenChange, onConnectionComplete 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg" aria-describedby="jira-connection-description">
-        <DialogHeader>
+      <DialogContent
+        className="!flex flex-col gap-4 !max-w-[32rem] w-[min(32rem,calc(100vw-2rem))] max-h-[calc(100vh-4rem)] sm:max-h-[calc(100vh-6rem)] overflow-hidden min-h-0"
+        aria-describedby="jira-connection-description"
+      >
+        <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <Link className="w-5 h-5 text-blue-600" />
             Подключение Jira
@@ -208,272 +211,277 @@ export function JiraConnectionDialog({ open, onOpenChange, onConnectionComplete 
           </DialogDescription>
         </DialogHeader>
 
-        {step === 'auth' && (
-          <div className="space-y-4">
-            <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-              <div className="flex items-center gap-2 mb-2">
-                <CheckCircle className="w-5 h-5 text-blue-600" />
-                <span className="font-medium">Безопасное подключение</span>
-              </div>
-              <p className="text-sm text-blue-700">
-                Данные используются только для чтения проектов и задач. Токен хранится локально на сервере.
-              </p>
-            </div>
-
-            {renderError()}
-
-            <div className="space-y-3">
-              <div>
-                <Label>URL вашей Jira</Label>
-                <Input
-                  placeholder="https://yourcompany.atlassian.net"
-                  value={jiraUrl}
-                  onChange={(event) => setJiraUrl(event.target.value)}
-                />
-              </div>
-              <div>
-                <Label>Email</Label>
-                <Input
-                  type="email"
-                  placeholder="integration@company.com"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                />
-              </div>
-              <div>
-                <Label>API Token</Label>
-                <Input
-                  type="password"
-                  placeholder="Вставьте ваш API токен"
-                  value={apiToken}
-                  onChange={(event) => setApiToken(event.target.value)}
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  Создайте API токен в настройках аккаунта Atlassian → Security.
+        <div className="flex-1 min-h-0 space-y-4 overflow-y-auto pr-2 pb-4">
+          {step === 'auth' && (
+            <div className="space-y-4">
+              <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <CheckCircle className="w-5 h-5 text-blue-600" />
+                  <span className="font-medium">Безопасное подключение</span>
+                </div>
+                <p className="text-sm text-blue-700">
+                  Данные используются только для чтения проектов и задач. Токен хранится локально на сервере.
                 </p>
               </div>
-            </div>
 
-            <Button
-              className="w-full"
-              onClick={handleAuth}
-              disabled={!jiraUrl || !email || !apiToken || isSubmitting}
-            >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Подключаемся…
-                </>
-              ) : (
-                'Авторизоваться'
-              )}
-            </Button>
-          </div>
-        )}
+              {renderError()}
 
-        {step === 'projects' && (
-          <div className="space-y-4">
-            <div className="p-3 bg-green-50 rounded-lg border border-green-200">
-              <div className="flex items-center gap-2">
-                <CheckCircle className="w-5 h-5 text-green-600" />
-                <span className="font-medium text-green-800">Подключение успешно</span>
+              <div className="space-y-3">
+                <div>
+                  <Label>URL вашей Jira</Label>
+                  <Input
+                    placeholder="https://yourcompany.atlassian.net"
+                    value={jiraUrl}
+                    onChange={(event) => setJiraUrl(event.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label>Email</Label>
+                  <Input
+                    type="email"
+                    placeholder="integration@company.com"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label>API Token</Label>
+                  <Input
+                    type="password"
+                    placeholder="Вставьте ваш API токен"
+                    value={apiToken}
+                    onChange={(event) => setApiToken(event.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Создайте API токен в настройках аккаунта Atlassian → Security.
+                  </p>
+                </div>
               </div>
-              <p className="text-sm text-green-700 mt-1">
-                Найдено {availableProjects.length} проектов. Отметьте нужные для импорта задач.
-              </p>
-            </div>
 
-            {renderError()}
-
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <Label className="text-sm font-medium">Проекты</Label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 px-3"
-                  onClick={selectAllProjects}
-                  disabled={availableProjects.length === 0}
-                >
-                  {selectedProjectKeys.length === availableProjects.length && availableProjects.length > 0
-                    ? 'Снять выделение'
-                    : 'Выбрать все'}
-                </Button>
-              </div>
-              <div className="space-y-2">
-                {availableProjects.map((project) => {
-                  const selected = selectedProjectKeys.includes(project.key);
-                  return (
-                    <div
-                      key={project.key}
-                      className="p-3 border rounded-lg hover:bg-gray-50 transition-colors cursor-pointer"
-                      onClick={() => toggleProjectSelection(project.key)}
-                    >
-                      <div className="flex items-center gap-3">
-                        <Checkbox
-                          checked={selected}
-                          onCheckedChange={() => toggleProjectSelection(project.key)}
-                          onClick={(event) => event.stopPropagation()}
-                          disabled={isSubmitting}
-                        />
-                        <div className="flex flex-1 items-center justify-between gap-3">
-                          <div>
-                            <div className="font-medium">{project.name}</div>
-                            <div className="text-sm text-muted-foreground">Ключ: {project.key}</div>
-                          </div>
-                          {selected ? (
-                            <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
-                              Выбрано
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
               <Button
                 className="w-full"
-                onClick={handleImportSelected}
-                disabled={selectedProjectKeys.length === 0 || isSubmitting}
+                onClick={handleAuth}
+                disabled={!jiraUrl || !email || !apiToken || isSubmitting}
               >
                 {isSubmitting ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Импортируем…
+                    Подключаемся…
                   </>
                 ) : (
-                  `Импортировать выбранные (${selectedProjectKeys.length})`
+                  'Авторизоваться'
                 )}
               </Button>
             </div>
-          </div>
-        )}
+          )}
 
-        {step === 'importing' && (
-          <div className="space-y-4">
-            <div className="text-center">
-              <Loader2 className="w-8 h-8 animate-spin mx-auto text-blue-600 mb-4" />
-              <h3 className="font-medium mb-2">Импортируем данные</h3>
-              <p className="text-sm text-muted-foreground">
-                {selectedProjectKey
-                  ? `Загружаем данные проекта ${selectedProjectKey}`
-                  : 'Загружаем данные из выбранных проектов'}
-              </p>
-              {importQueueCount > 1 && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  Проект {Math.min(importedProjects.length + 1, importQueueCount)} из {importQueueCount}
+          {step === 'projects' && (
+            <div className="space-y-4">
+              <div className="p-3 bg-green-50 rounded-lg border border-green-200">
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="w-5 h-5 text-green-600" />
+                  <span className="font-medium text-green-800">Подключение успешно</span>
+                </div>
+                <p className="text-sm text-green-700 mt-1">
+                  Найдено {availableProjects.length} проектов. Отметьте нужные для импорта задач.
                 </p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span>Прогресс импорта</span>
-                <span>{importProgress}%</span>
               </div>
-              <Progress value={importProgress} className="h-2" />
-            </div>
 
-            <div className="p-3 bg-orange-50 rounded-lg border border-orange-200">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-orange-600" />
-                <span className="text-sm font-medium">Не закрывайте окно</span>
-              </div>
-              <p className="text-xs text-orange-700 mt-1">
-                Импорт может занять несколько минут в зависимости от объёма задач.
-              </p>
-            </div>
-          </div>
-        )}
+              {renderError()}
 
-        {step === 'complete' && (
-          <div className="space-y-4 text-center">
-            <div className="mx-auto w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
-              <CheckCircle className="w-8 h-8 text-green-600" />
-            </div>
-            <h3 className="text-lg font-medium">
-              {importedProjects.length > 1 ? 'Импорт завершён' : 'Проект подключен'}
-            </h3>
-            <p className="text-sm text-muted-foreground">
-              {importedProjects.length > 1
-                ? `Импортированы ${importedProjects.length} проекта(ов). Можно перейти к задачам и проверке перед биллингом.`
-                : 'Данные успешно импортированы. Можно перейти к задачам и проверке перед биллингом.'}
-            </p>
-            {importSummary && (
-              <div className="text-sm text-left bg-slate-50 border border-slate-200 rounded-lg p-3">
-                <p className="font-medium mb-1">
-                  {importedProjects.length > 1 ? 'Сводные результаты' : 'Итог импорта'}
-                </p>
-                <ul className="space-y-1 text-muted-foreground">
-                  <li>Создано: {importSummary.created}</li>
-                  <li>Обновлено: {importSummary.updated}</li>
-                  <li>
-                    Пропущено: {importSummary.skipped}
-                    {importSummary.reason ? ` (${importSummary.reason})` : ''}
-                  </li>
-                </ul>
-              </div>
-            )}
-            {importedProjects.length > 1 && (
-              <div className="text-sm text-left bg-white border border-slate-200 rounded-lg p-3">
-                <p className="font-medium mb-2">По каждому проекту</p>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm font-medium">Проекты</Label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-3"
+                    onClick={selectAllProjects}
+                    disabled={availableProjects.length === 0}
+                  >
+                    {selectedProjectKeys.length === availableProjects.length && availableProjects.length > 0
+                      ? 'Снять выделение'
+                      : 'Выбрать все'}
+                  </Button>
+                </div>
                 <div className="space-y-2">
-                  {importedProjects.map(({ project, summary }) => (
-                    <div key={project.key} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2">
-                      <div>
-                        <div className="font-medium">{project.name}</div>
-                        <div className="text-xs text-muted-foreground">Ключ: {project.key}</div>
-                      </div>
-                      <div className="text-xs text-muted-foreground text-right">
-                        <div>Создано: {summary.created}</div>
-                        <div>Обновлено: {summary.updated}</div>
-                        <div>
-                          Пропущено: {summary.skipped}
-                          {summary.reason ? ` (${summary.reason})` : ''}
+                  {availableProjects.map((project) => {
+                    const selected = selectedProjectKeys.includes(project.key);
+                    return (
+                      <div
+                        key={project.key}
+                        className="p-3 border rounded-lg hover:bg-gray-50 transition-colors cursor-pointer"
+                        onClick={() => toggleProjectSelection(project.key)}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Checkbox
+                            checked={selected}
+                            onCheckedChange={() => toggleProjectSelection(project.key)}
+                            onClick={(event) => event.stopPropagation()}
+                            disabled={isSubmitting}
+                          />
+                          <div className="flex flex-1 items-center justify-between gap-3">
+                            <div>
+                              <div className="font-medium">{project.name}</div>
+                              <div className="text-sm text-muted-foreground">Ключ: {project.key}</div>
+                            </div>
+                            {selected ? (
+                              <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+                                Выбрано
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
+                <Button
+                  className="w-full"
+                  onClick={handleImportSelected}
+                  disabled={selectedProjectKeys.length === 0 || isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Импортируем…
+                    </>
+                  ) : (
+                    `Импортировать выбранные (${selectedProjectKeys.length})`
+                  )}
+                </Button>
               </div>
-            )}
-            {importHistory.length > 0 && (
-              <div className="text-sm text-left bg-white border border-slate-200 rounded-lg p-0">
-                <div className="px-3 py-2 border-b bg-slate-50 rounded-t-lg">
-                  <p className="font-medium">История импортов</p>
+            </div>
+          )}
+
+          {step === 'importing' && (
+            <div className="space-y-4">
+              <div className="text-center">
+                <Loader2 className="w-8 h-8 animate-spin mx-auto text-blue-600 mb-4" />
+                <h3 className="font-medium mb-2">Импортируем данные</h3>
+                <p className="text-sm text-muted-foreground">
+                  {selectedProjectKey
+                    ? `Загружаем данные проекта ${selectedProjectKey}`
+                    : 'Загружаем данные из выбранных проектов'}
+                </p>
+                {importQueueCount > 1 && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Проект {Math.min(importedProjects.length + 1, importQueueCount)} из {importQueueCount}
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span>Прогресс импорта</span>
+                  <span>{importProgress}%</span>
                 </div>
-                <div className="max-h-48 overflow-y-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-slate-100">
-                      <tr className="text-left">
-                        <th className="px-3 py-2 font-medium">Проект</th>
-                        <th className="px-3 py-2 font-medium">Дата</th>
-                        <th className="px-3 py-2 font-medium">Создано</th>
-                        <th className="px-3 py-2 font-medium">Обновлено</th>
-                        <th className="px-3 py-2 font-medium">Пропущено</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {importHistory.slice(0, 8).map((log) => (
-                        <tr key={log.id} className="border-t">
-                          <td className="px-3 py-2">{projectNamesByKey.get(log.projectKey) ?? log.projectKey}</td>
-                          <td className="px-3 py-2">{new Date(log.createdAt).toLocaleString('ru-RU')}</td>
-                          <td className="px-3 py-2">{log.created}</td>
-                          <td className="px-3 py-2">{log.updated}</td>
-                          <td className="px-3 py-2">{log.skipped}{log.reason ? ` (${log.reason})` : ''}</td>
+                <Progress value={importProgress} className="h-2" />
+              </div>
+
+              <div className="p-3 bg-orange-50 rounded-lg border border-orange-200">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-orange-600" />
+                  <span className="text-sm font-medium">Не закрывайте окно</span>
+                </div>
+                <p className="text-xs text-orange-700 mt-1">
+                  Импорт может занять несколько минут в зависимости от объёма задач.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {step === 'complete' && (
+            <div className="space-y-4 text-center">
+              <div className="mx-auto w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
+                <CheckCircle className="w-8 h-8 text-green-600" />
+              </div>
+              <h3 className="text-lg font-medium">
+                {importedProjects.length > 1 ? 'Импорт завершён' : 'Проект подключен'}
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                {importedProjects.length > 1
+                  ? `Импортированы ${importedProjects.length} проекта(ов). Можно перейти к задачам и проверке перед биллингом.`
+                  : 'Данные успешно импортированы. Можно перейти к задачам и проверке перед биллингом.'}
+              </p>
+              {importSummary && (
+                <div className="text-sm text-left bg-slate-50 border border-slate-200 rounded-lg p-3">
+                  <p className="font-medium mb-1">
+                    {importedProjects.length > 1 ? 'Сводные результаты' : 'Итог импорта'}
+                  </p>
+                  <ul className="space-y-1 text-muted-foreground">
+                    <li>Создано: {importSummary.created}</li>
+                    <li>Обновлено: {importSummary.updated}</li>
+                    <li>
+                      Пропущено: {importSummary.skipped}
+                      {importSummary.reason ? ` (${importSummary.reason})` : ''}
+                    </li>
+                  </ul>
+                </div>
+              )}
+              {importedProjects.length > 1 && (
+                <div className="text-sm text-left bg-white border border-slate-200 rounded-lg p-3">
+                  <p className="font-medium mb-2">По каждому проекту</p>
+                  <div className="space-y-2">
+                    {importedProjects.map(({ project, summary }) => (
+                      <div key={project.key} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2">
+                        <div>
+                          <div className="font-medium">{project.name}</div>
+                          <div className="text-xs text-muted-foreground">Ключ: {project.key}</div>
+                        </div>
+                        <div className="text-xs text-muted-foreground text-right">
+                          <div>Создано: {summary.created}</div>
+                          <div>Обновлено: {summary.updated}</div>
+                          <div>
+                            Пропущено: {summary.skipped}
+                            {summary.reason ? ` (${summary.reason})` : ''}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {importHistory.length > 0 && (
+                <div className="text-sm text-left bg-white border border-slate-200 rounded-lg p-0">
+                  <div className="px-3 py-2 border-b bg-slate-50 rounded-t-lg">
+                    <p className="font-medium">История импортов</p>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-100">
+                        <tr className="text-left">
+                          <th className="px-3 py-2 font-medium">Проект</th>
+                          <th className="px-3 py-2 font-medium">Дата</th>
+                          <th className="px-3 py-2 font-medium">Создано</th>
+                          <th className="px-3 py-2 font-medium">Обновлено</th>
+                          <th className="px-3 py-2 font-medium">Пропущено</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {importHistory.slice(0, 8).map((log) => (
+                          <tr key={log.id} className="border-t">
+                            <td className="px-3 py-2">{projectNamesByKey.get(log.projectKey) ?? log.projectKey}</td>
+                            <td className="px-3 py-2">{new Date(log.createdAt).toLocaleString('ru-RU')}</td>
+                            <td className="px-3 py-2">{log.created}</td>
+                            <td className="px-3 py-2">{log.updated}</td>
+                            <td className="px-3 py-2">
+                              {log.skipped}
+                              {log.reason ? ` (${log.reason})` : ''}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
-            )}
-            <Button className="w-full" onClick={handleComplete}>
-              Перейти к задачам
-            </Button>
-          </div>
-        )}
+              )}
+              <Button className="w-full" onClick={handleComplete}>
+                Перейти к задачам
+              </Button>
+            </div>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );
