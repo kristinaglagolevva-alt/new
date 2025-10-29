@@ -38,6 +38,7 @@ if OPENAI_API_KEY and OpenAI is not None:
     _openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 from datetime import datetime, date
+from calendar import monthrange
 from .contracts import ServiceError
 
 
@@ -123,6 +124,7 @@ DOCUMENT_TYPE_MAP = {
     "Акт": "act",
     "Счет": "invoice",
     "Пакет": "package",
+    "Приказ": "order",
 }
 
 DOC_V2_TYPE_LABELS = {
@@ -130,7 +132,8 @@ DOC_V2_TYPE_LABELS = {
     "APP": "Акт",
     "IPR": "Акт",
     "INVOICE": "Счет",
-    "SERVICE_ASSIGN": "Пакет",
+    "SERVICE_ASSIGN": "Служебное задание",
+    "ORDER": "Приказ",
 }
 
 DOC_V2_FILE_TYPES = {
@@ -138,7 +141,8 @@ DOC_V2_FILE_TYPES = {
     "APP": "act",
     "IPR": "act",
     "INVOICE": "invoice",
-    "SERVICE_ASSIGN": "package",
+    "SERVICE_ASSIGN": "internal",
+    "ORDER": "internal",
 }
 
 DOC_V2_PRIORITY = {
@@ -147,6 +151,7 @@ DOC_V2_PRIORITY = {
     "IPR": 2,
     "INVOICE": 3,
     "SERVICE_ASSIGN": 4,
+    "ORDER": 5,
 }
 
 DOC_V2_AUDIENCE = {
@@ -155,10 +160,89 @@ DOC_V2_AUDIENCE = {
     "IPR": ["act"],
     "INVOICE": ["invoice"],
     "SERVICE_ASSIGN": ["internal"],
+    "ORDER": ["internal"],
 }
 
 
 PLACEHOLDER_PATTERN = re.compile(r"\$\{([^}]+)\}")
+
+
+TEMPLATE_VARIABLE_EXPORT_KEYS: set[str] = {
+    "companyName",
+    "companyInn",
+    "companyKpp",
+    "companyBasis",
+    "seoFullName",
+    "seoShortName",
+    "seoPosition",
+    "seoAuthority",
+    "responsiblePerson",
+    "contractorCompanyName",
+    "contractorSeoFullName",
+    "contractorseoShortName",
+    "employeeName",
+    "employeeInn",
+    "employeeContractNumber",
+    "employeeContractDate",
+    "assignmentGoal",
+    "assignmentPurpose",
+    "assignmentRequirements",
+    "assignmentAppendix",
+    "assignmentBasis",
+    "appendixName",
+    "deadlineDate",
+    "orderNumber",
+    "orderDate",
+    "orderNumber1",
+    "orderDate1",
+    "orderNumber2",
+    "orderDate2",
+    "softwareName",
+    "softwareCustomer",
+    "softwareFunctionality",
+    "projectSystemName",
+    "repositorySystem",
+    "devServer",
+    "gitlabServer",
+    "gptBody",
+    "bodygpt",
+    "actNumber",
+    "startPeriodDate",
+    "endPeriodDate",
+    "totalAmountNumeric",
+    "totalAmountWords",
+    "vatAmountNumeric",
+    "vatAmountWords",
+}
+
+
+CONTRACT_EXTRA_MAPPING: dict[str, str] = {
+    "responsible_person": "responsiblePerson",
+    "seo_full_name": "seoFullName",
+    "seo_short_name": "seoShortName",
+    "seo_position": "seoPosition",
+    "seo_authority": "seoAuthority",
+    "appendix_name": "appendixName",
+    "assignment_goal": "assignmentGoal",
+    "assignment_purpose": "assignmentPurpose",
+    "assignment_requirements": "assignmentRequirements",
+    "assignment_basis": "assignmentBasis",
+    "assignment_appendix": "assignmentAppendix",
+    "deadline_date": "deadlineDate",
+    "order_number": "orderNumber",
+    "order_date": "orderDate",
+    "order_number_1": "orderNumber1",
+    "order_date_1": "orderDate1",
+    "order_number_2": "orderNumber2",
+    "order_date_2": "orderDate2",
+    "software_name": "softwareName",
+    "software_customer": "softwareCustomer",
+    "software_functionality": "softwareFunctionality",
+    "project_system_name": "projectSystemName",
+    "repository_system": "repositorySystem",
+    "dev_server": "devServer",
+    "gitlab_server": "gitlabServer",
+}
 
 
 logger = logging.getLogger(__name__)
@@ -222,6 +306,227 @@ def _render_template_content(content: str, context: dict[str, str]) -> str:
         return str(context.get(key, ""))
 
     return PLACEHOLDER_PATTERN.sub(replace, content)
+
+
+def _stringify_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "Да" if value else "Нет"
+    if isinstance(value, (int, float, Decimal)):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.strftime("%d.%m.%Y")
+    if isinstance(value, date):
+        return value.strftime("%d.%m.%Y")
+    if isinstance(value, str):
+        text = value.strip()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            try:
+                parsed = datetime.strptime(text, "%Y-%m-%d")
+                return parsed.strftime("%d.%m.%Y")
+            except ValueError:
+                return text
+        return text
+    return str(value)
+
+
+def _short_name(full_name: str | None) -> str:
+    if not full_name:
+        return ""
+    parts = re.split(r"[\s,]+", full_name.strip())
+    parts = [part for part in parts if part]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    initials = [f"{segment[0].upper()}." for segment in parts[1:] if segment]
+    initials_text = " ".join(initials[:2])
+    return f"{parts[0]} {initials_text}".strip()
+
+
+def _split_position_authority(basis: str | None) -> tuple[str | None, str | None]:
+    if not basis:
+        return (None, None)
+    text = basis.strip()
+    if not text:
+        return (None, None)
+    parts = [item.strip() for item in text.split(",", 1) if item]
+    if len(parts) == 2:
+        return (parts[0] or None, parts[1] or None)
+    match = re.search(r"(действующ[\w\s]+на\s+основании.*)", text, re.IGNORECASE)
+    if match:
+        authority = match.group(1).strip()
+        position = text[: match.start()].strip(" ,;")
+        return (position or None, authority or None)
+    return (None, text)
+
+
+def _parse_period_bounds(period: str | None) -> tuple[str | None, str | None]:
+    if not period:
+        return (None, None)
+    match = re.search(r"(20\d{2})[\.\-/](\d{1,2})", period)
+    if not match:
+        return (None, None)
+    year = int(match.group(1))
+    month = int(match.group(2))
+    if not (1 <= month <= 12):
+        return (None, None)
+    first_day = date(year, month, 1)
+    last_day = date(year, month, monthrange(year, month)[1])
+    return (first_day.strftime("%d.%m.%Y"), last_day.strftime("%d.%m.%Y"))
+
+
+def _sanitize_doc_number(value: str | None) -> str:
+    if not value:
+        return ""
+    cleaned = re.sub(r"[^0-9A-Za-z\-/]", "", value.upper())
+    return cleaned.strip("-/")
+
+
+def _merge_template_variables(context: dict[str, str], *sources: dict[str, object], overwrite: bool = False) -> None:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key, raw_value in source.items():
+            if raw_value is None:
+                continue
+            text = _stringify_value(raw_value)
+            if isinstance(text, str) and not text.strip():
+                continue
+            if overwrite or not context.get(key):
+                context[key] = text
+
+
+def _collect_client_variables(client: orm_models.LegalEntityORM | None) -> dict[str, object]:
+    if not client:
+        return {}
+    position, authority = _split_position_authority(client.basis or "")
+    result: dict[str, object] = {
+        "companyName": client.name or "",
+        "companyInn": client.inn or "",
+        "companyKpp": client.kpp or "",
+        "seoFullName": client.signatory or "",
+        "seoShortName": _short_name(client.signatory),
+        "seoPosition": position or "",
+        "seoAuthority": authority or client.basis or "",
+        "companyBasis": client.basis or "",
+        "powerOfAttorneyNumber": client.power_of_attorney_number or None,
+        "powerOfAttorneyDate": client.power_of_attorney_date or None,
+        "responsiblePerson": client.signatory or "",
+    }
+    # legacy aliases
+    result["clientInn"] = result.get("companyInn", "")
+    result["clientKpp"] = result.get("companyKpp", "")
+    return {key: value for key, value in result.items() if value not in (None, "")}
+
+
+def _collect_contractor_variables(contractor: orm_models.IndividualORM | None, performer_type: str | None) -> dict[str, object]:
+    if not contractor:
+        return {}
+    performer_name = contractor.name or ""
+    short_name = _short_name(performer_name)
+    result: dict[str, object] = {
+        "employeeName": performer_name,
+        "employeeInn": contractor.inn or "",
+        "employeeAddress": contractor.address or "",
+        "employeeEmail": contractor.email or "",
+        "contractorCompanyName": performer_name,
+        "contractorSeoFullName": performer_name,
+        "contractorseoShortName": short_name,
+    }
+    if performer_type == "employee" and performer_name:
+        result.setdefault("responsiblePerson", performer_name)
+    return {key: value for key, value in result.items() if value not in (None, "")}
+
+
+def _collect_contract_variables(contract: orm_models.ContractORM | None) -> dict[str, object]:
+    if not contract:
+        return {}
+    result: dict[str, object] = {
+        "contractNumber": contract.number or "",
+        "employeeContractNumber": contract.number or "",
+    }
+    contract_date = getattr(contract, "contract_date", None) or getattr(contract, "created_at", None)
+    if isinstance(contract_date, (datetime, date)):
+        result["employeeContractDate"] = contract_date
+
+    settings = getattr(contract, "settings", None)
+    if settings and getattr(settings, "extra", None):
+        extra = settings.extra or {}
+        if isinstance(extra, dict):
+            for src_key, dst_key in CONTRACT_EXTRA_MAPPING.items():
+                if src_key in extra and extra[src_key] not in (None, ""):
+                    result[dst_key] = extra[src_key]
+            nested_candidates = [
+                extra.get("template_variables"),
+                extra.get("templateVariables"),
+                extra.get("document_variables"),
+            ]
+            for candidate in nested_candidates:
+                if isinstance(candidate, dict):
+                    for key, value in candidate.items():
+                        if value not in (None, ""):
+                            result[str(key)] = value
+    return {key: value for key, value in result.items() if value not in (None, "")}
+
+
+def _collect_contract_meta_variables(meta: dict | None) -> dict[str, object]:
+    if not isinstance(meta, dict):
+        return {}
+    result: dict[str, object] = {}
+    for src_key, dst_key in CONTRACT_EXTRA_MAPPING.items():
+        value = meta.get(src_key)
+        if value in (None, ""):
+            continue
+        result[dst_key] = value
+    nested_candidates = [
+        meta.get("template_variables"),
+        meta.get("templateVariables"),
+        meta.get("document_variables"),
+    ]
+    for candidate in nested_candidates:
+        if isinstance(candidate, dict):
+            for key, value in candidate.items():
+                if value in (None, ""):
+                    continue
+                result[str(key)] = value
+    return result
+
+
+def _collect_metadata_variables(metadata: object) -> dict[str, object]:
+    if not isinstance(metadata, dict):
+        return {}
+    variables: dict[str, object] = {}
+    for key in ("template_variables", "templateVariables", "variables"):
+        candidate = metadata.get(key)
+        if isinstance(candidate, dict):
+            for inner_key, value in candidate.items():
+                if value not in (None, ""):
+                    variables[str(inner_key)] = value
+    return variables
+
+
+def _derive_act_number(
+    *,
+    context: dict[str, str],
+    work_package: orm_models.WorkPackageORM,
+    contract: orm_models.ContractORM | None,
+    payload: DocumentCreateRequest,
+) -> str:
+    if context.get("actNumber"):
+        return context["actNumber"]
+    parts: list[str] = []
+    if contract and contract.number:
+        parts.append(_sanitize_doc_number(contract.number))
+    period = payload.period or work_package.period or ""
+    start_label, end_label = _parse_period_bounds(period)
+    if start_label and end_label:
+        period_token = f"{start_label[:2]}{start_label[3:5]}-{end_label[:2]}{end_label[3:5]}"
+        parts.append(period_token)
+    elif period:
+        parts.append(_sanitize_doc_number(period))
+    parts.append(work_package.id[-6:].upper())
+    generated = "-".join(filter(None, parts))
+    return _sanitize_doc_number(generated)
 
 
 def _task_attribute(source, *names):
@@ -1309,7 +1614,10 @@ def _build_context(
 
     context['table2'] = context['tableTasks']
 
-    prepared_for = work_package.metadata_json.get('preparedFor') if isinstance(work_package.metadata_json, dict) else None
+    metadata_map = work_package.metadata_json if isinstance(work_package.metadata_json, dict) else {}
+    _merge_template_variables(context, _collect_metadata_variables(metadata_map))
+
+    prepared_for = metadata_map.get('preparedFor') if isinstance(metadata_map, dict) else None
     if isinstance(prepared_for, list):
         context['preparedFor'] = ', '.join(prepared_for)
 
@@ -1318,39 +1626,76 @@ def _build_context(
     if end_date:
         context['endPeriodDate'] = end_date.strftime('%d.%m.%Y')
 
+    if not context.get('startPeriodDate') or not context.get('endPeriodDate'):
+        derived_start, derived_end = _parse_period_bounds(payload.period or work_package.period)
+        if derived_start and not context.get('startPeriodDate'):
+            context['startPeriodDate'] = derived_start
+        if derived_end and not context.get('endPeriodDate'):
+            context['endPeriodDate'] = derived_end
+
     if contract:
-        context['contractNumber'] = contract.number or ''
         context['rateType'] = contract.rate_type or ''
+    _merge_template_variables(context, _collect_contract_variables(contract))
 
     if client:
-        context['companyName'] = client.name or ''
-        context['seoFullName'] = client.signatory or ''
-        context['clientInn'] = client.inn or ''
-        context['clientKpp'] = client.kpp or ''
+        _merge_template_variables(context, _collect_client_variables(client), overwrite=True)
+        context.setdefault('companyName', client.name or '')
+        context.setdefault('seoFullName', client.signatory or '')
+        context.setdefault('companyInn', client.inn or '')
+        context.setdefault('companyKpp', client.kpp or '')
+        context.setdefault('clientInn', context.get('companyInn', ''))
+        context.setdefault('clientKpp', context.get('companyKpp', ''))
+
+    performer_type = payload.performerType or getattr(work_package, 'performer_type', None)
 
     if contractor:
-        context['employeeName'] = contractor.name or ''
-        context['employeeInn'] = contractor.inn or ''
-        context['employeeAddress'] = contractor.address or ''
+        _merge_template_variables(context, _collect_contractor_variables(contractor, performer_type))
+        context.setdefault('employeeName', contractor.name or '')
+        context.setdefault('employeeInn', contractor.inn or '')
+        context.setdefault('employeeAddress', contractor.address or '')
 
     if payload.performerType:
         context['performerType'] = payload.performerType
-    # --- дополнительные поля под твой шаблон ---
-    # Номер акта: если у тебя есть своя логика присвоения — подставь её здесь.
-    # Пока оставим пустым, чтобы шаблон не ломался.
-    context['actNumber'] = context.get('actNumber', '') or ''
+    elif performer_type:
+        context['performerType'] = performer_type
 
     # Реквизиты договора
     if contract:
-        # уже было: context['contractNumber'] = contract.number or ''
-        context['employeeContractNumber'] = contract.number or ''
+        context.setdefault('contractNumber', contract.number or '')
+        context.setdefault('employeeContractNumber', contract.number or '')
         # если в ORM есть дата договора — подставь; иначе оставим пустым
         contract_date = getattr(contract, "contract_date", None) or getattr(contract, "created_at", None)
         context['employeeContractDate'] = contract_date.strftime('%d.%m.%Y') if contract_date else ''
 
     # Короткое ФИО для подписи (если есть отдельное поле — используй его)
     seo_full = context.get('seoFullName') or (client.signatory if client else '')
-    context['seoShortName'] = seo_full  # при желании можно сократить до инициалов
+    context['seoShortName'] = _short_name(seo_full)
+
+    if not context.get('responsiblePerson') and contractor and contractor.name:
+        context['responsiblePerson'] = contractor.name
+
+    if not context.get('assignmentBasis') and context.get('employeeContractNumber'):
+        basis_parts = [f"Договор № {context['employeeContractNumber']}"]
+        if context.get('employeeContractDate'):
+            basis_parts[0] += f" от {context['employeeContractDate']}"
+        context['assignmentBasis'] = basis_parts[0]
+
+    if not context.get('appendixName') and context.get('employeeContractNumber'):
+        context['appendixName'] = f"Приложение к договору № {context['employeeContractNumber']}"
+
+    if not context.get('deadlineDate') and context.get('endPeriodDate'):
+        context['deadlineDate'] = context['endPeriodDate']
+
+    context.setdefault('projectSystemName', 'Jira')
+
+    generated_act_number = _derive_act_number(
+        context=context,
+        work_package=work_package,
+        contract=contract,
+        payload=payload,
+    )
+    if generated_act_number:
+        context['actNumber'] = generated_act_number
 
     return context
 
@@ -1541,6 +1886,152 @@ def _generate_gpt_act_text(items: Iterable, payload: DocumentCreateRequest) -> s
     html.extend(f"<p>{escape(paragraph)}</p>" for paragraph in final_paragraphs)
     html.append("</div>")
     return "\n".join(html)
+
+
+def _collect_task_sentences(bullets: list[dict[str, object]], limit: int = 6) -> list[str]:
+    sentences: list[str] = []
+    for bullet in bullets:
+        raw_description = bullet.get("description") or bullet.get("summary") or ""
+        cleaned = _strip_meta_lines(_strip_html_markup(str(raw_description)))
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if not cleaned:
+            continue
+        sentences.append(cleaned)
+        if len(sentences) >= limit:
+            break
+    return sentences
+
+
+def _build_assignment_fallback(bullets: list[dict[str, object]], context: dict[str, str]) -> dict[str, str]:
+    project = context.get('projectName') or context.get('projectKey') or 'проекта'
+    start = context.get('startPeriodDate')
+    end = context.get('endPeriodDate')
+    period_fragment = ''
+    if start and end:
+        period_fragment = f" за период {start} — {end}"
+    total_hours = context.get('totalHours')
+    hours_fragment = f", объём работ {total_hours} ч." if total_hours else ''
+    company = context.get('companyName')
+    customer_phrase = f" заказчику «{company}»" if company else " заказчику"
+
+    sentences = _collect_task_sentences(bullets, limit=5)
+    tasks_text = "; ".join(sentences) if sentences else "перечень задач согласно договору"
+
+    fallback = {
+        'assignmentGoal': f"Выполнить задачи проекта {project}{period_fragment}{hours_fragment}.",
+        'assignmentPurpose': f"Передать результаты разработки{customer_phrase}.",
+        'assignmentRequirements': f"Выполнить следующие работы: {tasks_text}.",
+        'assignmentAppendix': "Приложение содержит детализацию задач и артефактов, выполненных в отчётный период.",
+    }
+    return fallback
+
+
+def _generate_service_assignment_sections(
+    *,
+    bullets: list[dict[str, object]],
+    context: dict[str, str],
+    payload: DocumentCreateRequest,
+) -> dict[str, str]:
+    if not bullets:
+        return {}
+
+    fallback = _build_assignment_fallback(bullets, context)
+
+    gpt_options = getattr(payload, "gptOptions", None)
+    if not (_openai_client and gpt_options and getattr(gpt_options, "enabled", False)):
+        return fallback
+
+    info_lines: list[str] = []
+    project_label = context.get('projectName') or context.get('projectKey')
+    if project_label:
+        info_lines.append(f"Проект: {project_label}")
+    company_label = context.get('companyName')
+    if company_label:
+        info_lines.append(f"Заказчик: {company_label}")
+    performer_label = context.get('employeeName')
+    if performer_label:
+        info_lines.append(f"Исполнитель: {performer_label}")
+    period_start = context.get('startPeriodDate')
+    period_end = context.get('endPeriodDate')
+    if period_start and period_end:
+        info_lines.append(f"Период: {period_start} — {period_end}")
+    hours_label = context.get('totalHours')
+    if hours_label:
+        info_lines.append(f"Объём часов: {hours_label}")
+    amount_label = context.get('totalAmount')
+    if amount_label:
+        info_lines.append(f"Сумма: {amount_label}")
+
+    tasks_lines: list[str] = []
+    for index, bullet in enumerate(bullets[:20], start=1):
+        key = str(bullet.get('key') or index)
+        description = _strip_meta_lines(_strip_html_markup(str(bullet.get('description') or '')))
+        if not description:
+            description = str(bullet.get('summary') or '').strip()
+        description = re.sub(r"\s+", " ", description).strip()
+        if not description:
+            continue
+        hours = bullet.get('hours')
+        hour_fragment = f" (затрачено {hours} ч.)" if hours else ""
+        tasks_lines.append(f"{index}. {key}: {description}{hour_fragment}")
+
+    if not tasks_lines:
+        return fallback
+
+    system_prompt = (
+        "Ты помогаешь подготовить разделы служебного задания на основе фактических задач. "
+        "Используй только факты из данных: не добавляй вымышленные требования, заказчиков или цифры. "
+        "Ответ возвращай строго в формате JSON."
+    )
+
+    info_block = "\n".join(info_lines)
+    tasks_block = "\n".join(tasks_lines)
+
+    user_prompt = (
+        "Сформируй JSON с ключами goal, purpose, requirements, appendix.\n"
+        "Требования к каждому полю: одно лаконичное предложение, без перечислений и пунктов.\n"
+        "Если данных явно не хватает, используй символ '—'.\n"
+        f"Контекст:\n{info_block}\n\n"
+        f"Задачи:\n{tasks_block}"
+    )
+
+    try:
+        response = _openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=400,
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        content = response.choices[0].message.content if response.choices else ""
+        data = json.loads(content) if content else {}
+    except Exception as exc:  # pragma: no cover - network/format failures
+        logger.debug("GPT assignment generation failed: %s", exc)
+        return fallback
+
+    mapping = {
+        'goal': 'assignmentGoal',
+        'purpose': 'assignmentPurpose',
+        'requirements': 'assignmentRequirements',
+        'appendix': 'assignmentAppendix',
+    }
+    result: dict[str, str] = {}
+    for source_key, target_key in mapping.items():
+        value = data.get(source_key)
+        if isinstance(value, list):
+            value = " ".join(str(item).strip() for item in value if str(item).strip())
+        if isinstance(value, str):
+            candidate = value.strip()
+            if candidate:
+                result[target_key] = candidate
+
+    for key, fallback_value in fallback.items():
+        result.setdefault(key, fallback_value)
+
+    return result
 def _boolish(v) -> bool:
     if isinstance(v, bool):
         return v
@@ -2327,6 +2818,137 @@ def _map_closing_document(session: Session, record: orm_models.DocumentV2ORM) ->
     )
 
 
+def _deduplicate_notes(notes: Iterable[DocumentApprovalNote]) -> list[DocumentApprovalNote]:
+    seen: set[tuple] = set()
+    ordered: list[DocumentApprovalNote] = []
+    for note in sorted(
+        notes,
+        key=lambda item: (item.timestamp or datetime.min, item.status, item.author, item.message),
+    ):
+        signature = (
+            (note.timestamp.isoformat() if note.timestamp else None),
+            note.status,
+            note.author,
+            note.role,
+            note.message,
+        )
+        if signature in seen:
+            continue
+        seen.add(signature)
+        ordered.append(note)
+    return ordered
+
+
+def _merge_closing_documents(
+    session: Session,
+    records: list[orm_models.DocumentV2ORM],
+) -> DocumentRecord:
+    if not records:
+        raise ValueError("Expected at least one closing document")
+
+    mapped_documents = [_map_closing_document(session, record) for record in records]
+    base_document = mapped_documents[0]
+
+    # Aggregate files with deterministic ordering
+    file_entries: list[tuple[int, DocumentFile]] = []
+    doc_labels: list[str] = []
+    for record, mapped in zip(records, mapped_documents):
+        priority = DOC_V2_PRIORITY.get(record.doc_type or "", 100)
+        for file_entry in mapped.files:
+            file_entries.append((priority, file_entry))
+        label = DOC_V2_TYPE_LABELS.get(record.doc_type or "", "Документ")
+        doc_labels.append(label)
+    file_entries.sort(key=lambda item: (item[0], item[1].label))
+    merged_files: dict[str, DocumentFile] = {}
+    for _, file_entry in file_entries:
+        merged_files.setdefault(file_entry.id, file_entry)
+
+    # Aggregate task snapshots
+    snapshot_map: dict[str, TaskCostSnapshot] = {}
+    for mapped in mapped_documents:
+        for snapshot in mapped.taskSnapshots:
+            snapshot_map[snapshot.id] = snapshot
+
+    unique_snapshots = list(snapshot_map.values())
+    unique_snapshots.sort(key=lambda snapshot: snapshot.id)
+
+    total_hours = round(sum(snapshot.hours for snapshot in unique_snapshots), 2)
+    total_amount = round(sum(snapshot.amount for snapshot in unique_snapshots), 2)
+    if total_amount <= 0:
+        total_amount = max((mapped.amount for mapped in mapped_documents), default=0.0)
+    if total_hours <= 0:
+        total_hours = max((mapped.totalHours for mapped in mapped_documents), default=0.0)
+
+    vat_amount_candidates = [mapped.vatAmount for mapped in mapped_documents if mapped.vatAmount > 0]
+    vat_amount = max(vat_amount_candidates, default=0.0)
+    vat_percent_candidates = [mapped.vatPercent for mapped in mapped_documents if mapped.vatPercent > 0]
+    vat_percent = max(vat_percent_candidates, default=base_document.vatPercent)
+    vat_included = any(mapped.vatIncluded or mapped.vatAmount > 0 for mapped in mapped_documents)
+
+    tags: list[str] = []
+    prepared_for: list[str] = []
+    for mapped in mapped_documents:
+        tags.extend(mapped.metadata.tags or [])
+        prepared_for.extend(mapped.metadata.preparedFor or [])
+    deduped_tags = list(dict.fromkeys(tags))
+    deduped_prepared = list(dict.fromkeys(prepared_for))
+
+    include_timesheet = any(mapped.includeTimesheet for mapped in mapped_documents)
+
+    status_priority = {
+        "rejected_performer": 0,
+        "rejected_manager": 0,
+        "draft": 10,
+        "pending_performer": 20,
+        "pending_manager": 30,
+        "manager_approved": 40,
+        "final": 50,
+    }
+    aggregated_status = base_document.approvalStatus
+    aggregated_priority = status_priority.get(aggregated_status, 10)
+    collected_notes: list[DocumentApprovalNote] = []
+
+    for mapped in mapped_documents:
+        priority = status_priority.get(mapped.approvalStatus, 10)
+        if priority < aggregated_priority:
+            aggregated_status = mapped.approvalStatus
+            aggregated_priority = priority
+        collected_notes.extend(mapped.approvalNotes or [])
+
+    aggregated_metadata = base_document.metadata.copy(update={
+        "tags": deduped_tags,
+        "preparedFor": deduped_prepared,
+    })
+
+    hourly_rate = base_document.hourlyRate
+    if total_hours > 0 and total_amount > 0:
+        hourly_rate = round(total_amount / total_hours, 2)
+
+    doc_labels = list(dict.fromkeys(doc_labels))
+    package_label = "Пакет документов"
+    if doc_labels:
+        package_label = f"Пакет: {', '.join(doc_labels)}"
+
+    aggregated_document = base_document.copy(update={
+        "type": package_label,
+        "files": list(merged_files.values()),
+        "taskSnapshots": unique_snapshots,
+        "tasksCount": len(unique_snapshots),
+        "totalHours": total_hours,
+        "amount": total_amount,
+        "hourlyRate": hourly_rate,
+        "vatAmount": vat_amount,
+        "vatPercent": vat_percent,
+        "vatIncluded": vat_included,
+        "includeTimesheet": include_timesheet,
+        "approval_status": aggregated_status,
+        "approvalNotes": _deduplicate_notes(collected_notes),
+        "metadata": aggregated_metadata,
+    })
+
+    return aggregated_document
+
+
 def _transition_document_v2_approval(
     session: Session,
     document: orm_models.DocumentV2ORM,
@@ -2771,19 +3393,28 @@ def generate_document(session: Session, payload: DocumentCreateRequest) -> Docum
             auto_wants_gpt = True
 
     # Source items for narrative: prefer real TaskORMs (have descriptions), otherwise snapshots
-    source_items = tasks if tasks else (work_package.task_snapshots or [])  # (оставляем как есть)
+    if tasks:
+        source_items = list(tasks)
+    else:
+        source_items = list(work_package.task_snapshots or [])
 
-    # Always generate narrative HTML (deterministic fallback if no API/key)
-    narrative_html = _generate_gpt_act_text(source_items, payload) if source_items else ""
+    task_bullets = _prepare_task_bullets(source_items) if source_items else []
+
+    narrative_html = ""
+    if source_items:
+        try:
+            narrative_html = _generate_gpt_act_text(source_items, payload)
+        except ServiceError as exc:
+            logger.debug("GPT narrative unavailable: %s", exc)
+            lang = "ru"
+            gpt_options = getattr(payload, "gptOptions", None)
+            if gpt_options and getattr(gpt_options, "language", None):
+                lang = gpt_options.language
+            narrative_html = _build_plain_act_html(task_bullets, lang=lang)
 
     # --- Diagnostics about descriptions availability ---
-    total_items = len(list(source_items)) if source_items else 0
-    try:
-        # re-create an iterator safely
-        src_iter = tasks if tasks else (work_package.task_snapshots or [])
-        described = sum(1 for x in src_iter if _has_description(x))
-    except Exception:
-        described = 0
+    total_items = len(source_items)
+    described = sum(1 for item in source_items if _has_description(item)) if source_items else 0
 
     # Store diagnostics in metadata for visibility
     meta_diag = work_package.metadata_json if isinstance(work_package.metadata_json, dict) else {}
@@ -2805,6 +3436,35 @@ def generate_document(session: Session, payload: DocumentCreateRequest) -> Docum
     else:
         # ensure key exists so placeholder won't render as empty if template expects it
         context.setdefault("gptBody", "")
+
+    if narrative_html and not context.get("bodygpt"):
+        context["bodygpt"] = narrative_html
+
+    assignment_sections = _generate_service_assignment_sections(
+        bullets=task_bullets,
+        context=context,
+        payload=payload,
+    )
+    for key, value in assignment_sections.items():
+        if not context.get(key):
+            context[key] = value
+
+    template_export = {
+        key: context[key]
+        for key in TEMPLATE_VARIABLE_EXPORT_KEYS
+        if context.get(key)
+    }
+    if template_export:
+        metadata_container = record.metadata_json if isinstance(record.metadata_json, dict) else {}
+        existing_snapshot = metadata_container.get("template_variables") if isinstance(metadata_container, dict) else {}
+        if not isinstance(existing_snapshot, dict):
+            existing_snapshot = {}
+        for key, value in template_export.items():
+            existing_snapshot.setdefault(key, value)
+        metadata_container = dict(metadata_container or {})
+        metadata_container["template_variables"] = existing_snapshot
+        record.metadata_json = metadata_container
+        metadata_for_record["template_variables"] = existing_snapshot
 
     # Decide whether to replace legacy table placeholders with the narrative
     replace_tables = bool((getattr(payload, "gptOptions", None) and payload.gptOptions and getattr(payload.gptOptions, "enabled", False)) or auto_wants_gpt)
@@ -2882,7 +3542,18 @@ def list_documents(session: Session, current_user: UserPublic | None = None) -> 
         .all()
     )
 
-    closing = [_map_closing_document(session, record) for record in closing_records]
+    closing_group_map: dict[tuple, list[orm_models.DocumentV2ORM]] = defaultdict(list)
+    for record in closing_records:
+        key = (
+            record.package_id or record.id,
+            record.contract_id,
+            record.performer_id or 0,
+            record.period_start,
+            record.period_end,
+        )
+        closing_group_map[key].append(record)
+
+    closing = [_merge_closing_documents(session, records) for records in closing_group_map.values()]
 
     if active_workspace_id:
         closing = [
@@ -2891,6 +3562,8 @@ def list_documents(session: Session, current_user: UserPublic | None = None) -> 
             if item.workspaceId == active_workspace_id
             or (item.sharedWithParent and item.sharedParentId == active_workspace_id)
         ]
+
+    closing.sort(key=lambda item: item.createdAt, reverse=True)
 
     combined = legacy + closing
     combined.sort(key=lambda item: item.createdAt, reverse=True)

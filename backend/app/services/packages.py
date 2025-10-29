@@ -38,6 +38,8 @@ from .documents import (
     _format_hours,
     _format_number_plain,
     _amount_to_words,
+    _merge_template_variables,
+    _collect_contract_meta_variables,
     _v2_work_package_key_from_ids,
 )
 from ..storage import get_template, list_templates
@@ -671,9 +673,23 @@ class PackageBuilder:
     def _plan_for_task(self, task: ResolvedTask) -> GroupPlan:
         performer_type = self._detect_performer_type(task)
         project_bucket = self._project_bucket(task)
-        doc_types, pair_id = self._doc_types_for(performer_type, task.contract)
+        doc_types, needs_pair = self._doc_types_for(performer_type, task.contract)
         vat_mode = VATMode(task.contract.vat_mode)
         currency = task.contract.currency
+        pair_id: Optional[str] = None
+        if needs_pair:
+            performer_identifier = None
+            if task.performer and getattr(task.performer, "id", None) is not None:
+                performer_identifier = task.performer.id
+            elif task.contract.performer and getattr(task.contract.performer, "id", None) is not None:
+                performer_identifier = task.contract.performer.id
+            pair_components = [
+                str(task.contract.id),
+                str(performer_identifier or "none"),
+                self.payload.period_start.strftime("%Y%m%d"),
+                self.payload.period_end.strftime("%Y%m%d"),
+            ]
+            pair_id = ":".join(pair_components)
         return GroupPlan(
             contract=task.contract,
             performer=task.performer or task.contract.performer,
@@ -699,26 +715,39 @@ class PackageBuilder:
         self,
         performer_type: str,
         contract: orm_models.ContractV2ORM,
-    ) -> Tuple[List[str], Optional[str]]:
+    ) -> Tuple[List[str], bool]:
         doc_types: List[str] = []
-        pair_id: Optional[str] = None
         has_ip = bool(self.ta and self.ta.has_ip)
-        ip_separate = contract.ip_transfer_mode == "separate"
+        ip_mode = (contract.ip_transfer_mode or "embedded").strip().lower()
+        needs_ip_doc = has_ip or ip_mode in {"embedded", "separate"}
+
+        def _ensure(value: str) -> None:
+            if value not in doc_types:
+                doc_types.append(value)
 
         if performer_type == "employee":
-            doc_types.append("SERVICE_ASSIGN")
-            if has_ip and ip_separate:
-                doc_types.append("APP")
-                pair_id = uuid.uuid4().hex
+            _ensure("SERVICE_ASSIGN")
+            if needs_ip_doc:
+                _ensure("IPR")
+            _ensure("ORDER")
+        elif performer_type == "company":
+            _ensure("AVR")
+            if needs_ip_doc:
+                _ensure("APP")
+            _ensure("ORDER")
         else:
-            doc_types.append("AVR")
-            if has_ip and ip_separate:
-                doc_types.append("APP")
-                pair_id = uuid.uuid4().hex
-            if contract.vat_mode in {VATMode.VAT_10.value, VATMode.VAT_20.value}:
-                doc_types.append("INVOICE")
+            _ensure("SERVICE_ASSIGN")
+            _ensure("AVR")
+            if needs_ip_doc:
+                _ensure("IPR")
+            _ensure("ORDER")
 
-        return doc_types, pair_id
+        if contract.vat_mode in {VATMode.VAT_10.value, VATMode.VAT_20.value}:
+            _ensure("INVOICE")
+
+        needs_pair = "AVR" in doc_types and any(doc in doc_types for doc in ("APP", "IPR"))
+
+        return doc_types, needs_pair
 
     def _detect_performer_type(self, task: ResolvedTask) -> str:
         if task.performer and task.performer.type:
@@ -1133,6 +1162,7 @@ class PackageBuilder:
             "IPR": "custom",
             "INVOICE": "invoice",
             "SERVICE_ASSIGN": "timesheet",
+            "ORDER": "custom",
         }
         bucket = bucket_map.get(doc_type)
         if not bucket:
@@ -1267,8 +1297,11 @@ class PackageBuilder:
 
                 if company and not legacy_client:
                     context["companyName"] = company.name or ""
-                    context["clientInn"] = company.inn or ""
-                    context["clientKpp"] = company.kpp or ""
+                    inn_value = company.inn or ""
+                    context["companyInn"] = inn_value
+                    context["clientInn"] = inn_value
+                    context["companyKpp"] = company.kpp or ""
+                    context.setdefault("clientKpp", context.get("companyKpp", ""))
 
                 base_contract_number = getattr(contract, "contract_number", "") or ""
                 if base_contract_number:
@@ -1294,8 +1327,10 @@ class PackageBuilder:
                         context["seoFullName"] = legacy_client.signatory
                         context["seoShortName"] = self._short_name(legacy_client.signatory)
                     if legacy_client.inn:
+                        context["companyInn"] = legacy_client.inn
                         context["clientInn"] = legacy_client.inn
                     if legacy_client.kpp:
+                        context["companyKpp"] = legacy_client.kpp
                         context["clientKpp"] = legacy_client.kpp
 
                 performer_name = (getattr(performer, "full_name", "") or "").strip()
@@ -1319,6 +1354,33 @@ class PackageBuilder:
                     context["bodygpt"] = combined_html
                 elif effective_html and not context.get("bodygpt"):
                     context["bodygpt"] = effective_html
+
+                if hasattr(contract, "meta") and isinstance(contract.meta, dict):
+                    _merge_template_variables(context, _collect_contract_meta_variables(contract.meta))
+
+                project_system = task_meta.get("project_system") or task_meta.get("projectSystem")
+                if project_system:
+                    context.setdefault("projectSystemName", project_system)
+                context.setdefault("projectSystemName", "Jira")
+
+                if not context.get("softwareName"):
+                    context["softwareName"] = (
+                        task_meta.get("software_name")
+                        or task_meta.get("softwareName")
+                        or context.get("projectName")
+                        or context.get("projectKey")
+                        or "Программный продукт"
+                    )
+                context.setdefault("softwareCustomer", context.get("companyName", ""))
+                if not context.get("softwareFunctionality") and context.get("assignmentRequirements"):
+                    context["softwareFunctionality"] = context["assignmentRequirements"]
+
+                if context.get("orderNumber1") and not context.get("orderNumber"):
+                    context["orderNumber"] = context["orderNumber1"]
+                if context.get("orderDate1") and not context.get("orderDate"):
+                    context["orderDate"] = context["orderDate1"]
+
+                context.setdefault("repositorySystem", task_meta.get("repository_system") or "GitLab")
 
                 table_rows_html = self._build_tasks_table_rows(plan)
                 if table_rows_html:

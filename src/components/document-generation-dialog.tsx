@@ -57,7 +57,7 @@ interface DocumentGenerationDialogProps {
   onDirectoryFocusRequested?: (focus: DirectoryFocus) => void;
 }
 
-type DocServerCode = 'AVR' | 'APP' | 'IPR' | 'INVOICE' | 'SERVICE_ASSIGN';
+type DocServerCode = 'AVR' | 'APP' | 'IPR' | 'INVOICE' | 'SERVICE_ASSIGN' | 'ORDER';
 type Step = 'snapshot' | 'confirm';
 
 type GroupWarningSeverity = 'info' | 'warning' | 'danger';
@@ -143,9 +143,10 @@ const DOC_CODE_LABELS: Record<DocServerCode, string> = {
   IPR: 'Акт передачи прав',
   INVOICE: 'Счёт-фактура',
   SERVICE_ASSIGN: 'Служебное задание',
+  ORDER: 'Приказ',
 };
 
-const DOC_CODE_ORDER: DocServerCode[] = ['SERVICE_ASSIGN', 'AVR', 'APP', 'IPR', 'INVOICE'];
+const DOC_CODE_ORDER: DocServerCode[] = ['ORDER', 'SERVICE_ASSIGN', 'AVR', 'APP', 'IPR', 'INVOICE'];
 
 const USAGE_OPTIONS: Array<{
   key: UsageKey;
@@ -402,7 +403,7 @@ const VatSettingsControl = ({
 
 const LOCAL_RULES: Record<string, PerformerRuleConfig> = {
   employee: {
-    docs: ['SERVICE_ASSIGN', 'IPR'],
+    docs: ['ORDER', 'SERVICE_ASSIGN', 'IPR'],
     vatMode: 'hidden',
     rate: { mode: 'hidden' },
     normHours: { mode: 'hidden' },
@@ -410,7 +411,7 @@ const LOCAL_RULES: Record<string, PerformerRuleConfig> = {
     extraFlags: { allowMonetaryActs: false, requireNpdReceipt: false },
   },
   gph: {
-    docs: ['AVR', 'IPR'],
+    docs: ['ORDER', 'SERVICE_ASSIGN', 'AVR', 'IPR'],
     vatMode: 'hidden',
     rate: { mode: 'editable' },
     normHours: { mode: 'readonly' },
@@ -418,7 +419,7 @@ const LOCAL_RULES: Record<string, PerformerRuleConfig> = {
     extraFlags: { allowMonetaryActs: true, requireNpdReceipt: false },
   },
   selfemployed: {
-    docs: ['AVR', 'IPR'],
+    docs: ['ORDER', 'SERVICE_ASSIGN', 'AVR', 'IPR'],
     vatMode: 'hidden',
     rate: { mode: 'editable' },
     normHours: { mode: 'readonly' },
@@ -426,7 +427,7 @@ const LOCAL_RULES: Record<string, PerformerRuleConfig> = {
     extraFlags: { allowMonetaryActs: true, requireNpdReceipt: true },
   },
   ip: {
-    docs: ['AVR', 'IPR', 'INVOICE'],
+    docs: ['ORDER', 'SERVICE_ASSIGN', 'AVR', 'IPR', 'INVOICE'],
     vatMode: 'readonly',
     rate: { mode: 'editable' },
     normHours: { mode: 'readonly' },
@@ -434,7 +435,7 @@ const LOCAL_RULES: Record<string, PerformerRuleConfig> = {
     extraFlags: { allowMonetaryActs: true, requireNpdReceipt: false },
   },
   company: {
-    docs: ['AVR', 'APP', 'INVOICE'],
+    docs: ['ORDER', 'AVR', 'APP', 'INVOICE'],
     vatMode: 'editable',
     rate: { mode: 'editable' },
     normHours: { mode: 'readonly' },
@@ -618,6 +619,8 @@ const getTemplateBucket = (doc: DocServerCode): Template['type'] => {
       return 'invoice';
     case 'SERVICE_ASSIGN':
       return 'timesheet';
+    case 'ORDER':
+      return 'custom';
     case 'IPR':
     case 'APP':
       return 'custom';
@@ -640,7 +643,11 @@ const resolveDocCodeForTemplate = (
     return performerType === 'company' ? 'APP' : 'IPR';
   }
 
-  if (template.type === 'timesheet' || normalizedName.includes('служеб') || normalizedName.includes('задани') || normalizedName.includes('приказ')) {
+  if (normalizedName.includes('приказ')) {
+    return 'ORDER';
+  }
+
+  if (template.type === 'timesheet' || normalizedName.includes('служеб') || normalizedName.includes('задани')) {
     return 'SERVICE_ASSIGN';
   }
 
@@ -649,6 +656,9 @@ const resolveDocCodeForTemplate = (
   }
 
   if (template.type === 'custom') {
+    if (normalizedName.includes('приказ')) {
+      return 'ORDER';
+    }
     return performerType === 'company' ? 'APP' : 'IPR';
   }
 
@@ -674,6 +684,7 @@ export function DocumentGenerationDialog({
     legalEntities,
     templates,
     taskPeriods,
+    trackerProjects,
     generatePackage,
     getContractUiProfile,
     loadDocuments,
@@ -732,22 +743,23 @@ export function DocumentGenerationDialog({
     const rangeEnd = customPeriodRange.to ?? customPeriodRange.from;
     return `${dateFormatter.format(customPeriodRange.from)} — ${dateFormatter.format(rangeEnd)}`;
   }, [customPeriodRange]);
+  const createPeriodRange = useCallback((startInput: Date, endInput: Date) => {
+    const startDate = toStartOfDay(startInput);
+    const endDate = toEndOfDay(endInput);
+    return {
+      startDate,
+      endDate,
+      startValue: formatIsoDate(startDate),
+      endValue: formatIsoDate(endDate),
+    } as const;
+  }, []);
+
   const periodRange = useMemo(() => {
-    const createRange = (startInput: Date, endInput: Date) => {
-      const startDate = toStartOfDay(startInput);
-      const endDate = toEndOfDay(endInput);
-      return {
-        startDate,
-        endDate,
-        startValue: formatIsoDate(startDate),
-        endValue: formatIsoDate(endDate),
-      };
-    };
 
     if (period === 'custom') {
       if (customPeriodRange?.from) {
         const toDate = customPeriodRange.to ?? customPeriodRange.from;
-        return createRange(customPeriodRange.from, toDate);
+        return createPeriodRange(customPeriodRange.from, toDate);
       }
       return null;
     }
@@ -757,7 +769,7 @@ export function DocumentGenerationDialog({
       const start = new Date(preset.start);
       const end = new Date(preset.end);
       if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
-        return createRange(start, end);
+        return createPeriodRange(start, end);
       }
     }
 
@@ -767,7 +779,7 @@ export function DocumentGenerationDialog({
         const year = Number(match[1]);
         const monthIndex = Number(match[2]) - 1;
         if (Number.isFinite(year) && Number.isFinite(monthIndex) && monthIndex >= 0 && monthIndex < 12) {
-          return createRange(new Date(year, monthIndex, 1), new Date(year, monthIndex + 1, 0));
+          return createPeriodRange(new Date(year, monthIndex, 1), new Date(year, monthIndex + 1, 0));
         }
       }
     }
@@ -795,6 +807,28 @@ export function DocumentGenerationDialog({
       return markerTime >= startTime && markerTime <= endTime;
     });
   }, [baseTaskList, periodRange]);
+  const selectedTasksAutoRange = useMemo(() => {
+    if (baseTaskList.length === 0) {
+      return null;
+    }
+    const timestamps: number[] = [];
+    baseTaskList.forEach((task) => {
+      const marker = task.completedAt ?? task.startedAt ?? task.updatedAt ?? task.createdAt ?? null;
+      if (!marker) {
+        return;
+      }
+      const markerTime = new Date(marker).getTime();
+      if (Number.isFinite(markerTime)) {
+        timestamps.push(markerTime);
+      }
+    });
+    if (timestamps.length === 0) {
+      return null;
+    }
+    const start = new Date(Math.min(...timestamps));
+    const end = new Date(Math.max(...timestamps));
+    return createPeriodRange(start, end);
+  }, [baseTaskList, createPeriodRange]);
   const [profileMap, setProfileMap] = useState<Record<string, ContractUiProfile | null>>({});
   const [profileLoading, setProfileLoading] = useState(false);
   const [groupOverrides, setGroupOverrides] = useState<Record<string, GroupOverride>>({});
@@ -819,6 +853,16 @@ export function DocumentGenerationDialog({
     });
     return map;
   }, [individuals]);
+
+  const projectSystemByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    trackerProjects.forEach((project) => {
+      if (project.key) {
+        map.set(project.key, project.tracker || 'Jira');
+      }
+    });
+    return map;
+  }, [trackerProjects]);
 
   const performerOptions = useMemo(() => {
     const unique = new Map<string, { label: string }>();
@@ -1008,7 +1052,7 @@ export function DocumentGenerationDialog({
     if (!open) {
       setStep('snapshot');
       setCustomPeriodRange(undefined);
-      setPeriod(defaultPeriod && defaultPeriod !== 'all' ? defaultPeriod : fallbackPeriod);
+      setPeriod(isBulkDocumentsMode ? (defaultPeriod && defaultPeriod !== 'all' ? defaultPeriod : fallbackPeriod) : 'custom');
       setProfileMap({});
       setGroupOverrides({});
       setActiveGroupKey(null);
@@ -1019,12 +1063,30 @@ export function DocumentGenerationDialog({
       setUseGptNarrative(true);
       return;
     }
+
+    if (!isBulkDocumentsMode) {
+      if (selectedTasksAutoRange) {
+        setCustomPeriodRange({ from: selectedTasksAutoRange.startDate, to: selectedTasksAutoRange.endDate });
+      } else {
+        setCustomPeriodRange(undefined);
+      }
+      setPeriod('custom');
+      return;
+    }
+
     if (defaultPeriod && defaultPeriod !== 'all' && periodOptions.some((option) => option.value === defaultPeriod)) {
       setPeriod(defaultPeriod);
     } else {
       setPeriod(fallbackPeriod);
     }
-  }, [open, defaultPeriod, fallbackPeriod, periodOptions]);
+  }, [
+    open,
+    isBulkDocumentsMode,
+    defaultPeriod,
+    fallbackPeriod,
+    periodOptions,
+    selectedTasksAutoRange,
+  ]);
 
   useEffect(() => {
     if (period === 'custom') {
@@ -1305,7 +1367,8 @@ export function DocumentGenerationDialog({
         APP: contract?.templateIprId ?? null,
         IPR: contract?.templateIprId ?? null,
         INVOICE: contract?.templateInvoiceId ?? null,
-        SERVICE_ASSIGN: contract?.templateIprId ?? null,
+        SERVICE_ASSIGN: null,
+        ORDER: null,
       };
 
       const allowedTemplateIds = Array.isArray(contract?.allowedTemplateIds)
@@ -1404,6 +1467,7 @@ export function DocumentGenerationDialog({
       templatesByDoc.IPR = docOptions.includes('IPR') ? templatesByDoc.IPR : null;
       templatesByDoc.INVOICE = docOptions.includes('INVOICE') ? templatesByDoc.INVOICE : null;
       templatesByDoc.SERVICE_ASSIGN = docOptions.includes('SERVICE_ASSIGN') ? templatesByDoc.SERVICE_ASSIGN : null;
+      templatesByDoc.ORDER = docOptions.includes('ORDER') ? templatesByDoc.ORDER : null;
 
       entries.push({
         key,
@@ -1506,21 +1570,11 @@ export function DocumentGenerationDialog({
       return { start: preset.start, end: preset.end };
     }
 
-    const timestamps: number[] = [];
-    selectedTasks.forEach((task) => {
-      const marker = task.completedAt ?? task.startedAt ?? task.updatedAt ?? task.createdAt ?? null;
-      if (!marker) {
-        return;
-      }
-      const markerDate = new Date(marker);
-      if (!Number.isNaN(markerDate.getTime())) {
-        timestamps.push(markerDate.getTime());
-      }
-    });
-    if (timestamps.length > 0) {
-      const startDate = toStartOfDay(new Date(Math.min(...timestamps)));
-      const endDate = toEndOfDay(new Date(Math.max(...timestamps)));
-      return { start: formatIsoDate(startDate), end: formatIsoDate(endDate) };
+    if (selectedTasksAutoRange) {
+      return {
+        start: selectedTasksAutoRange.startValue,
+        end: selectedTasksAutoRange.endValue,
+      };
     }
 
     const today = new Date();
@@ -1530,7 +1584,7 @@ export function DocumentGenerationDialog({
       start: formatIsoDate(startOfMonth),
       end: formatIsoDate(endOfMonth),
     };
-  }, [period, periodRange, selectedTasks, taskPeriods]);
+  }, [period, periodRange, selectedTasksAutoRange, taskPeriods]);
 
   const groupSummaries = useMemo(() => {
     return groupMatrix.map((group) => {
@@ -1783,6 +1837,13 @@ export function DocumentGenerationDialog({
           account_id: task.assigneeAccountId ?? undefined,
         };
 
+        const trackerLabel = projectSystemByKey.get(task.projectKey ?? '')
+          ?? projectSystemByKey.get(summary.group.projectKey ?? '')
+          ?? undefined;
+        if (trackerLabel) {
+          metaPayload.project_system = trackerLabel;
+        }
+
         Object.keys(metaPayload).forEach((key) => {
           if (metaPayload[key] === undefined) {
             delete metaPayload[key];
@@ -1918,7 +1979,7 @@ export function DocumentGenerationDialog({
     } finally {
       setIsSubmitting(false);
     }
-  }, [generatePackage, groupSummaries, hasBlockingIssues, individuals, legalEntitiesById, loadDocuments, loadWorkPackages, onSuccess, resolvePeriodBoundaries, useGptNarrative]);
+  }, [generatePackage, groupSummaries, hasBlockingIssues, individuals, legalEntitiesById, loadDocuments, loadWorkPackages, onSuccess, projectSystemByKey, resolvePeriodBoundaries, useGptNarrative]);
 
   const handleDownload = useCallback(async (doc: PackageGeneratedDocument) => {
     if (!doc.file_url) {

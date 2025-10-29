@@ -1048,17 +1048,26 @@ export function DocumentsPage({ onNavigate, onDirectoryFocusRequested }: Documen
     exportRecords(visibleDocuments.filter((record) => selectedSet.has(record.id)), format, 'selected');
 
   const downloadDocumentFile = async (record: DocumentRecord, file?: DocumentRecord['files'][number]) => {
-    const targetFile =
-      file ??
-      record.files.find((item) => ['docx', 'doc'].includes(item.format.toLowerCase())) ??
-      record.files[0];
-    if (!targetFile || !targetFile.url) {
+    const files = file ? [file] : record.files;
+    if (!files || files.length === 0) {
       console.warn('[DocumentsPage] No downloadable document file found');
       return;
     }
-    const safeLabel = targetFile.label.replace(/\s+/g, '-').toLowerCase() || 'document';
-    const fallbackName = `${record.id}-${safeLabel}.docx`;
-    await downloadFromBackend(targetFile.url, fallbackName);
+
+    for (const item of files) {
+      if (!item.url) {
+        console.warn('[DocumentsPage] File URL is not available');
+        continue;
+      }
+      const safeLabel = item.label.replace(/\s+/g, '-').toLowerCase() || 'document';
+      const fallbackName = `${record.id}-${safeLabel}.docx`;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await downloadFromBackend(item.url, fallbackName);
+      } catch (error) {
+        console.error('[DocumentsPage] Failed to download file', error);
+      }
+    }
   };
 
   const exportWorkPackages = (packages: WorkPackage[], format: 'json' | 'csv', suffix: string) => {
