@@ -41,6 +41,7 @@ from .documents import (
     _merge_template_variables,
     _collect_contract_meta_variables,
     _v2_work_package_key_from_ids,
+    _generate_service_assignment_sections,
 )
 from ..storage import get_template, list_templates
 from ..config import BASE_DIR
@@ -1221,6 +1222,29 @@ class PackageBuilder:
 
         return "".join(rows)
 
+    def _build_tasks_table_text(self, plan: GroupPlan) -> str:
+        items = self._build_task_items(plan)
+        lines: list[str] = []
+        for item in items:
+            key = (item.get("key") or item.get("id") or "").strip()
+            summary = (item.get("summary") or item.get("description") or "").strip()
+            status = (item.get("status") or "").strip()
+            hours = item.get("hours")
+            fragments = []
+            if key:
+                fragments.append(key)
+            if summary:
+                fragments.append(summary)
+            if status:
+                fragments.append(f"Статус: {status}")
+            if hours:
+                fragments.append(f"Часы: {hours}")
+            line = " — ".join(fragments) if fragments else "Задача"
+            lines.append(f"<p>{escape(line)}</p>")
+        if not lines:
+            lines.append("<p>Задачи не указаны</p>")
+        return "".join(lines)
+
 
     def _render_document_file(
         self,
@@ -1261,8 +1285,6 @@ class PackageBuilder:
 
                 context = {
                     "gptBody": effective_html,
-                    "tableTasks": effective_html,
-                    "table2": effective_html,
                     "startPeriodDate": f"{self.payload.period_start:%d.%m.%Y}",
                     "endPeriodDate": f"{self.payload.period_end:%d.%m.%Y}",
                     "totalHours": _format_hours(float(plan.hours)) if plan.hours is not None else "0",
@@ -1278,6 +1300,13 @@ class PackageBuilder:
                     "period": f"{self.payload.period_start:%d.%m.%Y} — {self.payload.period_end:%d.%m.%Y}",
                     "docType": doc_type,
                 }
+
+                table_rows_html = self._build_tasks_table_rows(plan)
+                table_rows_text = self._build_tasks_table_text(plan)
+                context["tableTasks"] = table_rows_html
+                context["table1"] = table_rows_html
+                context["table2"] = table_rows_html
+                context["tasksTable"] = table_rows_text
 
                 if performer:
                     context["employeeName"] = getattr(performer, "full_name", "") or ""
@@ -1363,6 +1392,17 @@ class PackageBuilder:
                     context.setdefault("projectSystemName", project_system)
                 context.setdefault("projectSystemName", "Jira")
 
+                if doc_type == "SERVICE_ASSIGN":
+                    assignment_payload = SimpleNamespace(gptOptions=self.options.gpt)
+                    assignment_sections = _generate_service_assignment_sections(
+                        bullets=self._build_task_items(plan),
+                        context=context,
+                        payload=assignment_payload,
+                    )
+                    for key, value in assignment_sections.items():
+                        if value and not context.get(key):
+                            context[key] = value
+
                 if not context.get("softwareName"):
                     context["softwareName"] = (
                         task_meta.get("software_name")
@@ -1389,6 +1429,9 @@ class PackageBuilder:
                         context["tableTasks"] = table_rows_html
                     if not context.get("table2"):
                         context["table2"] = table_rows_html
+                table_rows_text = self._build_tasks_table_text(plan)
+                if table_rows_text and not context.get("tasksTable"):
+                    context["tasksTable"] = table_rows_text
 
                 if not context.get("actNumber"):
                     if base_contract_number and document.version is not None:

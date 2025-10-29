@@ -399,7 +399,14 @@ def _merge_template_variables(context: dict[str, str], *sources: dict[str, objec
 def _collect_client_variables(client: orm_models.LegalEntityORM | None) -> dict[str, object]:
     if not client:
         return {}
-    position, authority = _split_position_authority(client.basis or "")
+    raw_basis = (client.basis or "").strip()
+    position, authority = _split_position_authority(raw_basis)
+    if authority and authority.lower() == "другое" and raw_basis:
+        authority = raw_basis
+    if not authority and raw_basis:
+        authority = raw_basis
+    if authority:
+        authority = authority.strip()
     result: dict[str, object] = {
         "companyName": client.name or "",
         "companyInn": client.inn or "",
@@ -407,8 +414,8 @@ def _collect_client_variables(client: orm_models.LegalEntityORM | None) -> dict[
         "seoFullName": client.signatory or "",
         "seoShortName": _short_name(client.signatory),
         "seoPosition": position or "",
-        "seoAuthority": authority or client.basis or "",
-        "companyBasis": client.basis or "",
+        "seoAuthority": authority or raw_basis,
+        "companyBasis": raw_basis,
         "powerOfAttorneyNumber": client.power_of_attorney_number or None,
         "powerOfAttorneyDate": client.power_of_attorney_date or None,
         "responsiblePerson": client.signatory or "",
@@ -416,6 +423,8 @@ def _collect_client_variables(client: orm_models.LegalEntityORM | None) -> dict[
     # legacy aliases
     result["clientInn"] = result.get("companyInn", "")
     result["clientKpp"] = result.get("companyKpp", "")
+    if not result.get("seoPosition"):
+        result["seoPosition"] = "Генерального директора"
     return {key: value for key, value in result.items() if value not in (None, "")}
 
 
@@ -478,6 +487,12 @@ def _collect_contract_meta_variables(meta: dict | None) -> dict[str, object]:
         if value in (None, ""):
             continue
         result[dst_key] = value
+    if 'orderNumber' in result:
+        result.setdefault('orderNumber1', result['orderNumber'])
+    if 'orderDate' in result:
+        result.setdefault('orderDate1', result['orderDate'])
+    if not result.get("seoPosition"):
+        result["seoPosition"] = "Генерального директора"
     nested_candidates = [
         meta.get("template_variables"),
         meta.get("templateVariables"),
@@ -775,7 +790,7 @@ def _initialize_document_defaults(document: Document) -> None:
         para.line_spacing = 1.2
         para.space_after = Pt(6)
         para.first_line_indent = Pt(_css_length_to_pt('1.25cm') or 35.4)
-        para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        para.alignment = WD_ALIGN_PARAGRAPH.LEFT
     except KeyError:
         pass
 
@@ -803,6 +818,8 @@ class DocxHtmlRenderer(HTMLParser):
         self._paragraph_style_depth = 0
         self._current_paragraph_classes: set[str] = set()
         self.section_stack: list[dict[str, object]] = []
+        self.list_item_stack: list[dict[str, object]] = []
+        self._paragraph_reuse_stack: list[bool] = []
 
         if container is None:
             if document.paragraphs:
@@ -854,7 +871,15 @@ class DocxHtmlRenderer(HTMLParser):
             return
 
         if tag_lower in {'p', 'div'}:
-            self._start_paragraph(attr_map, style_map, classes)
+            reuse = False
+            if tag_lower == 'p' and self.list_item_stack:
+                li_ctx = self.list_item_stack[-1]
+                paragraph = li_ctx.get('paragraph')
+                if paragraph is not None:
+                    if self.current_paragraph is None:
+                        self.current_paragraph = paragraph  # reuse list item paragraph
+                    reuse = True
+            self._start_paragraph(attr_map, style_map, classes, reuse_current=reuse)
         elif tag_lower in {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}:
             para = self._start_paragraph(attr_map, style_map, classes)
             try:
@@ -881,7 +906,8 @@ class DocxHtmlRenderer(HTMLParser):
             self.list_stack.append('number')
         elif tag_lower == 'li':
             list_type = self.list_stack[-1] if self.list_stack else 'bullet'
-            self._start_paragraph(attr_map, style_map, classes, list_type=list_type)
+            paragraph = self._start_paragraph(attr_map, style_map, classes, list_type=list_type)
+            self.list_item_stack.append({'paragraph': paragraph})
         elif tag_lower == 'table':
             self._break_paragraph()
             self.table_stack.append({'rows': [], 'current_row': None, 'attrs': attr_map, 'style': style_map, 'classes': classes})
@@ -900,6 +926,8 @@ class DocxHtmlRenderer(HTMLParser):
                 self.run_attrs_stack.pop()
         elif tag_lower in {'p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}:
             self._break_paragraph()
+            if tag_lower == 'li' and self.list_item_stack:
+                self.list_item_stack.pop()
         elif tag_lower in {'ul', 'ol'}:
             if self.list_stack:
                 self.list_stack.pop()
@@ -966,14 +994,22 @@ class DocxHtmlRenderer(HTMLParser):
         classes: set[str],
         *,
         list_type: str | None = None,
+        reuse_current: bool = False,
     ):
         style_map = dict(style_map)
         for context in reversed(self.section_stack):
             context['paragraph_count'] = context.get('paragraph_count', 0) + 1
             _apply_section_paragraph_rules(style_map, context.get('classes', set()), context['paragraph_count'])
 
-        paragraph = self._new_paragraph(list_type)
-        self._current_paragraph_classes = set(classes)
+        paragraph = None
+        if reuse_current and self.current_paragraph is not None:
+            paragraph = self.current_paragraph
+        else:
+            paragraph = self._new_paragraph(list_type)
+        if reuse_current:
+            self._current_paragraph_classes.update(classes)
+        else:
+            self._current_paragraph_classes = set(classes)
         alignment = None
         if attr_map and attr_map.get('align'):
             alignment = (attr_map.get('align') or '').lower()
@@ -990,6 +1026,7 @@ class DocxHtmlRenderer(HTMLParser):
         self.current_paragraph = paragraph
         self._paragraph_style_depth += 1
         self._push_run_attrs(style_map=style_map)
+        self._paragraph_reuse_stack.append(reuse_current)
         return paragraph
 
     def _new_paragraph(self, list_type: str | None = None):
@@ -1026,11 +1063,14 @@ class DocxHtmlRenderer(HTMLParser):
         return self.current_paragraph
 
     def _break_paragraph(self) -> None:
-        self.current_paragraph = None
+        reuse = self._paragraph_reuse_stack.pop() if self._paragraph_reuse_stack else False
         if self._paragraph_style_depth > 0:
             if len(self.run_attrs_stack) > 1:
                 self.run_attrs_stack.pop()
             self._paragraph_style_depth -= 1
+        if reuse:
+            return
+        self.current_paragraph = None
         self._current_paragraph_classes = set()
 
     # Formatting helpers ------------------------------------------------
@@ -1077,12 +1117,16 @@ class DocxHtmlRenderer(HTMLParser):
         paragraph = self._ensure_paragraph()
         text = text.replace('\r', '')
         parts = text.split('\n')
+        emitted = bool(paragraph.text)
         for index, part in enumerate(parts):
-            if index > 0:
+            if index > 0 and emitted:
                 paragraph.add_run().add_break()
+            elif index > 0 and not emitted and not part:
+                continue
             if part:
                 run = paragraph.add_run(_preserve_spaces(part))
                 self._apply_run_attrs(run)
+                emitted = True
 
     def _apply_run_attrs(self, run) -> None:
         attrs = self.run_attrs_stack[-1]
@@ -1917,11 +1961,24 @@ def _build_assignment_fallback(bullets: list[dict[str, object]], context: dict[s
     sentences = _collect_task_sentences(bullets, limit=5)
     tasks_text = "; ".join(sentences) if sentences else "перечень задач согласно договору"
 
+    order_refs: list[str] = []
+    for number_key, date_key in (("orderNumber", "orderDate"), ("orderNumber1", "orderDate1"), ("orderNumber2", "orderDate2")):
+        number = context.get(number_key)
+        date = context.get(date_key)
+        if not number:
+            continue
+        clause = f"Приказ № {number}"
+        if date:
+            clause += f" от {date}"
+        order_refs.append(clause)
+    basis_fragment = "; ".join(order_refs)
+
     fallback = {
         'assignmentGoal': f"Выполнить задачи проекта {project}{period_fragment}{hours_fragment}.",
         'assignmentPurpose': f"Передать результаты разработки{customer_phrase}.",
         'assignmentRequirements': f"Выполнить следующие работы: {tasks_text}.",
         'assignmentAppendix': "Приложение содержит детализацию задач и артефактов, выполненных в отчётный период.",
+        'assignmentBasis': basis_fragment or context.get('assignmentBasis') or "",
     }
     return fallback
 
@@ -1937,9 +1994,56 @@ def _generate_service_assignment_sections(
 
     fallback = _build_assignment_fallback(bullets, context)
 
-    gpt_options = getattr(payload, "gptOptions", None)
-    if not (_openai_client and gpt_options and getattr(gpt_options, "enabled", False)):
+    if not _openai_client:
         return fallback
+
+    gpt_options = getattr(payload, "gptOptions", None)
+    language = getattr(gpt_options, "language", "ru") if gpt_options else "ru"
+
+    def _clean_text(value: object, *, limit: int | None = None) -> str:
+        cleaned = _strip_meta_lines(_strip_html_markup(str(value or "")))
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if limit and len(cleaned) > limit:
+            truncated = cleaned[:limit].rsplit(" ", 1)[0].strip()
+            cleaned = truncated or cleaned[:limit].strip()
+        return cleaned
+
+    order_fragments: list[str] = []
+    basis_candidate = context.get('assignmentBasis') or fallback.get('assignmentBasis')
+    if basis_candidate:
+        order_fragments.append(basis_candidate)
+    for number_key, date_key in (("orderNumber", "orderDate"), ("orderNumber1", "orderDate1"), ("orderNumber2", "orderDate2")):
+        number = context.get(number_key)
+        if not number:
+            continue
+        clause = f"Приказ № {number}"
+        date = context.get(date_key)
+        if date:
+            clause += f" от {date}"
+        order_fragments.append(clause)
+    contract_number = context.get('employeeContractNumber') or context.get('contractNumber')
+    contract_date = context.get('employeeContractDate') or context.get('contractDate')
+    if contract_number:
+        clause = f"Договор № {contract_number}"
+        if contract_date:
+            clause += f" от {contract_date}"
+        order_fragments.append(clause)
+    period_start = context.get('startPeriodDate')
+    period_end = context.get('endPeriodDate')
+    if period_start and period_end:
+        order_fragments.append(f"Период работ {period_start} — {period_end}")
+
+    order_info = "; ".join(dict.fromkeys(fragment for fragment in order_fragments if fragment))
+    if not order_info:
+        order_info = "—"
+
+    narrative_source = context.get('bodygpt') or context.get('gptBody') or ""
+    narrative_text = _clean_text(narrative_source, limit=800)
+    if not narrative_text:
+        sentences = _collect_task_sentences(bullets, limit=5)
+        narrative_text = " ".join(sentences)
+    if not narrative_text:
+        narrative_text = "—"
 
     info_lines: list[str] = []
     project_label = context.get('projectName') or context.get('projectKey')
@@ -1961,6 +2065,9 @@ def _generate_service_assignment_sections(
     amount_label = context.get('totalAmount')
     if amount_label:
         info_lines.append(f"Сумма: {amount_label}")
+    software_label = context.get('softwareName') or context.get('projectName')
+    if software_label:
+        info_lines.append(f"ПО: {software_label}")
 
     tasks_lines: list[str] = []
     for index, bullet in enumerate(bullets[:20], start=1):
@@ -1976,24 +2083,64 @@ def _generate_service_assignment_sections(
         tasks_lines.append(f"{index}. {key}: {description}{hour_fragment}")
 
     if not tasks_lines:
-        return fallback
+        tasks_lines.append("—")
 
-    system_prompt = (
-        "Ты помогаешь подготовить разделы служебного задания на основе фактических задач. "
-        "Используй только факты из данных: не добавляй вымышленные требования, заказчиков или цифры. "
-        "Ответ возвращай строго в формате JSON."
-    )
+    if language == "en":
+        system_prompt = (
+            "You prepare service assignment sections based strictly on the provided order and completed tasks. "
+            "Use only the supplied facts. Output must be valid JSON."
+        )
+        user_head = (
+            "Create a JSON object with keys goal, basis, purpose, requirements, appendix.\n"
+            "Each value must be one concise sentence in a formal business tone. No lists or numbering. Use '—' if data is missing.\n"
+            "Combine the development order, act narrative, and task breakdown."
+        )
+        instructions_block = (
+            "- goal: describe the main development objective, referencing the software or module.\n"
+            "- basis: if the order/basis string equals '—', craft a lawful basis using the contract and period; otherwise repeat the provided string verbatim.\n"
+            "- purpose: state the business outcome for the customer or end users.\n"
+            "- requirements: summarise the essential functional changes from the tasks in one sentence.\n"
+            "- appendix: mention that the appendix contains the detailed list of tasks, hours, and amount if available."
+        )
+        order_label = "Development order / basis:"
+        narrative_label = "Narrative from the act:"
+        tasks_label = "Task breakdown:"
+        context_label = "Additional context:"
+    else:
+        system_prompt = (
+            "Ты готовишь разделы служебного задания, опираясь на приказ на разработку и фактические задачи. "
+            "Используй только переданные факты, не придумывай новые данные. Ответ возвращай строго в формате JSON."
+        )
+        user_head = (
+            "Сформируй JSON с ключами goal, basis, purpose, requirements, appendix.\n"
+            "Каждое значение — одно официально-деловое предложение без перечней и нумерации. Если данных нет, используй символ '—'.\n"
+            "Необходимо объединить информацию из приказа, акта и списка задач."
+        )
+        instructions_block = (
+            "- goal: обозначь ключевую цель разработки, упоминая продукт или модуль.\n"
+            "- basis: если строка «Приказ / основание» равна «—», сформулируй правовое основание с использованием договора и периода; иначе повтори её дословно.\n"
+            "- purpose: укажи, какой результат получает заказчик или пользователи.\n"
+            "- requirements: через одно предложение перечисли основные доработки и функции из задач.\n"
+            "- appendix: подчеркни, что приложение содержит детализацию задач, часы и сумму (если данные есть)."
+        )
+        order_label = "Приказ / основание:"
+        narrative_label = "Описание выполненных работ из акта:"
+        tasks_label = "Детализация задач:"
+        context_label = "Контекст:"
 
     info_block = "\n".join(info_lines)
     tasks_block = "\n".join(tasks_lines)
 
-    user_prompt = (
-        "Сформируй JSON с ключами goal, purpose, requirements, appendix.\n"
-        "Требования к каждому полю: одно лаконичное предложение, без перечислений и пунктов.\n"
-        "Если данных явно не хватает, используй символ '—'.\n"
-        f"Контекст:\n{info_block}\n\n"
-        f"Задачи:\n{tasks_block}"
-    )
+    prompt_sections = [
+        user_head,
+        instructions_block,
+        f"{order_label}\n{order_info}",
+        f"{narrative_label}\n{narrative_text}",
+        f"{tasks_label}\n{tasks_block}",
+    ]
+    if info_block:
+        prompt_sections.append(f"{context_label}\n{info_block}")
+    user_prompt = "\n\n".join(prompt_sections)
 
     try:
         response = _openai_client.chat.completions.create(
@@ -2014,6 +2161,7 @@ def _generate_service_assignment_sections(
 
     mapping = {
         'goal': 'assignmentGoal',
+        'basis': 'assignmentBasis',
         'purpose': 'assignmentPurpose',
         'requirements': 'assignmentRequirements',
         'appendix': 'assignmentAppendix',
@@ -2030,6 +2178,39 @@ def _generate_service_assignment_sections(
 
     for key, fallback_value in fallback.items():
         result.setdefault(key, fallback_value)
+
+    if order_info and order_info != "—":
+        result['assignmentBasis'] = order_info
+
+    if not result.get('assignmentBasis'):
+        basis_values = [fallback.get('assignmentBasis'), context.get('assignmentBasis')]
+        for value in basis_values:
+            if value:
+                result['assignmentBasis'] = value
+                break
+        else:
+            orders = []
+            for number_key, date_key in (("orderNumber", "orderDate"), ("orderNumber1", "orderDate1"), ("orderNumber2", "orderDate2")):
+                num = context.get(number_key)
+                date = context.get(date_key)
+                if not num:
+                    continue
+                clause = f"Приказ № {num}"
+                if date:
+                    clause += f" от {date}"
+                orders.append(clause)
+            if orders:
+                result['assignmentBasis'] = "; ".join(orders)
+            else:
+                contract_number = context.get('employeeContractNumber') or context.get('contractNumber')
+                contract_date = context.get('employeeContractDate') or context.get('contractDate')
+                if contract_number:
+                    clause = f"Договор № {contract_number}"
+                    if contract_date:
+                        clause += f" от {contract_date}"
+                    result['assignmentBasis'] = clause
+                elif period_start and period_end:
+                    result['assignmentBasis'] = f"Работы по периоду {period_start} — {period_end}"
 
     return result
 def _boolish(v) -> bool:
@@ -3467,7 +3648,12 @@ def generate_document(session: Session, payload: DocumentCreateRequest) -> Docum
         metadata_for_record["template_variables"] = existing_snapshot
 
     # Decide whether to replace legacy table placeholders with the narrative
-    replace_tables = bool((getattr(payload, "gptOptions", None) and payload.gptOptions and getattr(payload.gptOptions, "enabled", False)) or auto_wants_gpt)
+    doc_type_label = (payload.documentType or "").lower()
+    allow_table_replace = any(keyword in doc_type_label for keyword in {"служеб", "задани"})
+    replace_tables = allow_table_replace and bool(
+        (getattr(payload, "gptOptions", None) and payload.gptOptions and getattr(payload.gptOptions, "enabled", False))
+        or auto_wants_gpt
+    )
     if replace_tables and narrative_html:
         # Backward compatibility: substitute narrative for table placeholders
         context["tableTasks"] = narrative_html
