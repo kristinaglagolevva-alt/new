@@ -695,10 +695,22 @@ export function DocumentGenerationDialog({
 
   const isBulkDocumentsMode = defaultPeriod === undefined;
 
-  const baseTaskList = useMemo(
-    () => tasks.filter((task) => taskIds.includes(task.id)),
-    [tasks, taskIds],
-  );
+  const [excludedTaskIds, setExcludedTaskIds] = useState<string[]>([]);
+  const [zeroHourConfirmedGroups, setZeroHourConfirmedGroups] = useState<Record<string, true>>({});
+  const taskIdsSignature = useMemo(() => taskIds.join('|'), [taskIds]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    setExcludedTaskIds([]);
+    setZeroHourConfirmedGroups({});
+  }, [open, taskIdsSignature]);
+
+  const baseTaskList = useMemo(() => {
+    const excludedSet = new Set(excludedTaskIds);
+    return tasks.filter((task) => taskIds.includes(task.id) && !excludedSet.has(task.id));
+  }, [excludedTaskIds, taskIds, tasks]);
 
   const [selectedPerformerIds, setSelectedPerformerIds] = useState<'all' | string[]>('all');
   const [performerSelectorOpen, setPerformerSelectorOpen] = useState(false);
@@ -1350,7 +1362,7 @@ export function DocumentGenerationDialog({
       if (totalHours <= 0) {
         warnings.push({
           type: 'no-hours',
-          message: 'В задачах нет учтённых часов. Если нужен акт, добавьте часы в выбранные задачи.',
+          message: 'Вы хотите сформировать документ с нулевым временем? Вы уверены, что хотите их добавить?',
           severity: 'warning',
         });
       }
@@ -1611,8 +1623,9 @@ export function DocumentGenerationDialog({
       if (group.invoiceRequired && !docs.includes('INVOICE')) {
         blockingIssues.push('Заказчик требует счёт-фактуру в пакете');
       }
-      if (group.totalHours <= 0 && docs.includes('AVR')) {
-        blockingIssues.push('Акт не сформируется: в выбранных задачах нет учтённых часов.');
+      const zeroHoursAllowed = Boolean(zeroHourConfirmedGroups[group.key]);
+      if (group.totalHours <= 0 && !zeroHoursAllowed) {
+        blockingIssues.push('В задачах нет учтённых часов. Добавьте время или уберите задачи из акта.');
       }
       const npdReceiptMissing = group.requiresNpdReceipt && !(override?.npdReceiptConfirmed ?? false);
       return {
@@ -1628,10 +1641,11 @@ export function DocumentGenerationDialog({
         effectiveRate,
         blockingIssues,
         npdReceiptMissing,
+        zeroHoursAllowed,
         override,
       };
     });
-  }, [groupMatrix, groupOverrides]);
+  }, [groupMatrix, groupOverrides, zeroHourConfirmedGroups]);
 
   const hasBlockingIssues = groupSummaries.some((summary) => summary.blockingIssues.length > 0);
 
@@ -1835,7 +1849,27 @@ export function DocumentGenerationDialog({
           assignee: task.assigneeDisplayName ?? undefined,
           email: task.assigneeEmail ?? undefined,
           account_id: task.assigneeAccountId ?? undefined,
+          updated_at: task.updatedAt ?? undefined,
+          updatedAt: task.updatedAt ?? undefined,
+          completed_at: task.completedAt ?? undefined,
+          completedAt: task.completedAt ?? undefined,
+          started_at: task.startedAt ?? undefined,
+          startedAt: task.startedAt ?? undefined,
+          created_at: task.createdAt ?? undefined,
+          createdAt: task.createdAt ?? undefined,
         };
+        const taskDateCandidates = [task.completedAt, task.updatedAt, task.startedAt, task.createdAt].filter(Boolean);
+        if (taskDateCandidates.length > 0) {
+          metaPayload.worklog_dates = taskDateCandidates;
+          metaPayload.worklogDates = taskDateCandidates;
+        }
+
+        const originalHours = task.hours ?? 0;
+        const normalizedHours = summary.zeroHoursAllowed && originalHours <= 0 ? 0 : Math.max(originalHours, 0);
+        if (summary.zeroHoursAllowed && normalizedHours === 0) {
+          metaPayload.allow_zero_hours = true;
+          metaPayload.allowZeroHours = true;
+        }
 
         const trackerLabel = projectSystemByKey.get(task.projectKey ?? '')
           ?? projectSystemByKey.get(summary.group.projectKey ?? '')
@@ -1852,7 +1886,7 @@ export function DocumentGenerationDialog({
 
         const payload: PackageTaskInput = {
           jira_id: task.key || task.id,
-          hours: task.hours ?? 0,
+          hours: normalizedHours,
           status: task.status,
           assignee_id: performerId ?? undefined,
           contract_id: Number.isFinite(contractNumericId) ? contractNumericId : undefined,
@@ -1923,6 +1957,40 @@ export function DocumentGenerationDialog({
       const totalHoursValue = groupSummaries.reduce((sum, summary) => sum + summary.group.totalHours, 0);
       const totalAmountValue = groupSummaries.reduce((sum, summary) => sum + summary.amount, 0);
       const totalTasksCount = groupSummaries.reduce((sum, summary) => sum + summary.group.tasks.length, 0);
+      const collectTaskDate = (value?: string | null) => {
+        if (!value) {
+          return null;
+        }
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+      };
+      const taskDateBounds = (() => {
+        const dates: Date[] = [];
+        groupSummaries.forEach((summary) => {
+          summary.group.tasks.forEach((task) => {
+            const candidates = [task.completedAt, task.updatedAt, task.startedAt, task.createdAt];
+            for (const candidate of candidates) {
+              const parsed = collectTaskDate(candidate);
+              if (parsed) {
+                dates.push(parsed);
+                break;
+              }
+            }
+          });
+        });
+        if (dates.length === 0) {
+          return null;
+        }
+        dates.sort((a, b) => a.getTime() - b.getTime());
+        return {
+          start: dates[0],
+          end: dates[dates.length - 1],
+        };
+      })();
+      const effectiveStart = taskDateBounds?.start ?? (Number.isNaN(periodStartDate.getTime()) ? null : periodStartDate);
+      const effectiveEnd = taskDateBounds?.end ?? (Number.isNaN(periodEndDate.getTime()) ? null : periodEndDate);
+      const startLabelEffective = effectiveStart ? dateFormatter.format(effectiveStart) : startLabel;
+      const endLabelEffective = effectiveEnd ? dateFormatter.format(effectiveEnd) : endLabel;
       const condensedNarrative = (() => {
         if (narrativeChunks.length === 0) {
           return '';
@@ -1943,11 +2011,11 @@ export function DocumentGenerationDialog({
           .join(' ');
       })();
       const gptExtraNotes = [
-        `Период отчёта: ${startLabel} — ${endLabel}.`,
+        `Период отчёта: ${startLabelEffective} — ${endLabelEffective}.`,
         `Всего задач: ${totalTasksCount}. Отработано ${formatHours1Dec(totalHoursValue)} часов. Сумма к закрытию: ${formatCurrency(totalAmountValue)}.`,
         condensedNarrative ? `Контекст работ: ${condensedNarrative}` : '',
         factListForPrompt ? `Факты для описания: ${factListForPrompt}` : '',
-        `Сформируй финальный текст максимум из шести предложений. Начни с фразы "С ${startLabel} по ${endLabel}..." и опиши ключевые результаты.`,
+        `Сформируй финальный текст максимум из шести предложений. Начни с фразы "С ${startLabelEffective} по ${endLabelEffective}..." и опиши ключевые результаты.`,
         'Не используй списки, маркировку, нумерацию или дословные перечни задач в финальном тексте. Объедини работы по смыслу и заверши абзац предложением с суммарными часами и стоимостью.',
       ]
         .filter(Boolean)
@@ -2024,6 +2092,26 @@ export function DocumentGenerationDialog({
     }
   }, [apiBaseUrl, token]);
 
+  const handleZeroHoursConfirm = useCallback((groupKey: string) => {
+    setZeroHourConfirmedGroups((current) => (current[groupKey] ? current : { ...current, [groupKey]: true }));
+  }, []);
+
+  const handleZeroHoursExclude = useCallback((group: GroupMatrixEntry) => {
+    setExcludedTaskIds((current) => {
+      const next = new Set(current);
+      group.tasks.forEach((task) => next.add(task.id));
+      return Array.from(next);
+    });
+    setZeroHourConfirmedGroups((current) => {
+      if (!current[group.key]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[group.key];
+      return next;
+    });
+  }, []);
+
   const renderGroupRow = (group: GroupMatrixEntry) => {
     const override = groupOverrides[group.key];
     const docs = (override?.docs ?? group.defaultDocs).slice().sort((a, b) => DOC_CODE_ORDER.indexOf(a) - DOC_CODE_ORDER.indexOf(b));
@@ -2053,10 +2141,13 @@ export function DocumentGenerationDialog({
     });
     const performerName = describePerformer(group.performer, group.performerType);
     const contractTitle = group.contract?.number || group.contract?.id || '—';
-    const warningsToShow = [...group.warnings];
+    const zeroHoursWarning = group.warnings.find((warning) => warning.type === 'no-hours');
+    const warningsToShow = group.warnings.filter((warning) => warning.type !== 'no-hours');
     if (group.invoiceRequired && !docs.includes('INVOICE')) {
       warningsToShow.push({ type: 'invoice-required', message: 'Добавьте счёт-фактуру для этого заказчика', severity: 'warning' });
     }
+    const shouldOfferZeroHourChoice = Boolean(zeroHoursWarning);
+    const zeroHoursConfirmed = shouldOfferZeroHourChoice && Boolean(summarySnapshot?.zeroHoursAllowed);
     return (
       <div
         key={group.key}
@@ -2122,8 +2213,34 @@ export function DocumentGenerationDialog({
               );
             })}
           </div>
+          {shouldOfferZeroHourChoice && !zeroHoursConfirmed && (
+            <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                <div>
+                  <p className="font-medium">
+                    {zeroHoursWarning?.message ?? 'В задачах нет учтённых часов. Добавить их в документ?'}
+                  </p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <Button size="sm" onClick={() => handleZeroHoursConfirm(group.key)}>
+                      Да
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => handleZeroHoursExclude(group)}>
+                      Нет
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          {shouldOfferZeroHourChoice && zeroHoursConfirmed && (
+            <div className="mt-3 flex items-center gap-1 text-xs text-amber-600">
+              <Info className="h-3 w-3 flex-shrink-0" />
+              <span>Документы будут сформированы с задачами без учтённого времени.</span>
+            </div>
+          )}
           {warningsToShow.map((warning) => (
-            <div key={warning.type} className={cn('flex items-center gap-1 text-xs', warning.severity === 'danger' ? 'text-red-600' : warning.severity === 'warning' ? 'text-amber-600' : 'text-gray-500')}>
+            <div key={warning.type} className={cn('mt-2 flex items-center gap-1 text-xs', warning.severity === 'danger' ? 'text-red-600' : warning.severity === 'warning' ? 'text-amber-600' : 'text-gray-500')}>
               <AlertTriangle className="h-3 w-3 flex-shrink-0" />
               <span className="line-clamp-2">{warning.message}</span>
             </div>

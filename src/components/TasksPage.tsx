@@ -44,6 +44,21 @@ const UNASSIGNED_ASSIGNEE = '__unassigned__';
 const UNASSIGNED_ASSIGNEE_LABEL = 'Не указан';
 const formatDateForSummary = (date: Date) =>
   new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' }).format(date);
+const formatDateTimeFull = (date: Date) =>
+  new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+const parseTaskDate = (value?: string | null): Date | undefined => {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+};
 
 type BillableFilterValue = 'billable' | 'nonBillable' | 'forceIncluded';
 
@@ -1348,6 +1363,18 @@ export function TasksPage({ onNavigate, onDirectoryFocusRequested }: TasksPagePr
                       </div>
                     </div>
                   ) : null;
+                  const completedAtDate = parseTaskDate(task.completedAt);
+                  const updatedAtDate = parseTaskDate(task.updatedAt);
+                  const startedAtDate = parseTaskDate(task.startedAt);
+                  const createdAtDate = parseTaskDate(task.createdAt);
+                  const taskDateDetails = (
+                    [
+                      completedAtDate ? { label: 'Завершена', date: completedAtDate } : null,
+                      updatedAtDate ? { label: 'Обновлена', date: updatedAtDate } : null,
+                      startedAtDate ? { label: 'Начата', date: startedAtDate } : null,
+                      createdAtDate ? { label: 'Создана', date: createdAtDate } : null,
+                    ] as Array<{ label: string; date: Date } | null>
+                  ).filter((item): item is { label: string; date: Date } => Boolean(item));
 
                   return (
                     <TableRow key={task.id} className="group">
@@ -1439,7 +1466,42 @@ export function TasksPage({ onNavigate, onDirectoryFocusRequested }: TasksPagePr
                         )}
                       </TableCell>
                       <TableCell>
-                        <span className="font-mono text-sm">{task.key}</span>
+                        {task.key ? (
+                          <TooltipProvider delayDuration={100}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="font-mono text-sm cursor-help text-foreground transition-colors hover:text-primary">
+                                  {task.key}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent
+                                side="top"
+                                align="center"
+                                className="space-y-1 bg-popover text-popover-foreground border border-border shadow-lg"
+                              >
+                                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                                  Даты задачи
+                                </div>
+                                {taskDateDetails.length > 0 ? (
+                                  <div className="space-y-1">
+                                    {taskDateDetails.map((entry) => (
+                                      <div key={entry.label} className="flex items-center gap-2">
+                                        <span className="min-w-[88px] text-xs text-muted-foreground">{entry.label}:</span>
+                                        <span className="text-sm text-popover-foreground">
+                                          {formatDateTimeFull(entry.date)}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-sm text-muted-foreground">Даты недоступны</p>
+                                )}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ) : (
+                          <span className="font-mono text-sm text-muted-foreground">—</span>
+                        )}
                       </TableCell>
                       <TableCell>{getStatusBadge(task.status, task.billable)}</TableCell>
                       <TableCell>

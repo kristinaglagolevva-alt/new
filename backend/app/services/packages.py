@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 import uuid
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from docx import Document as DocxDocument
 from sqlalchemy import func, select
@@ -105,6 +105,8 @@ class GroupPlan:
     vat_amount: Decimal = DECIMAL_ZERO
     amount_total: Decimal = DECIMAL_ZERO
     order_details: List[dict[str, str]] = field(default_factory=list)
+    period_start_override: Optional[date] = None
+    period_end_override: Optional[date] = None
 
 
 class PackageBuilder:
@@ -207,12 +209,16 @@ class PackageBuilder:
             performer = self._resolve_performer_from_meta(task_input)
         contract = self._resolve_contract(task_input, performer)
         hours = self._to_decimal(task_input.hours)
-        if hours <= DECIMAL_ZERO:
+        meta_payload = task_input.meta or {}
+        allow_zero_hours = bool(meta_payload.get("allow_zero_hours") or meta_payload.get("allowZeroHours"))
+        if hours <= DECIMAL_ZERO and not allow_zero_hours:
             raise ServiceError(
                 "validation_failed",
                 "У задачи должны быть положительные часы",
                 {"jira_id": task_input.jira_id},
             )
+        if hours < DECIMAL_ZERO:
+            hours = DECIMAL_ZERO
         return ResolvedTask(
             jira_id=task_input.jira_id,
             performer=performer,
@@ -870,6 +876,7 @@ class PackageBuilder:
                 plan.performer.id if plan.performer else None,
             )
 
+            task_records: list[orm_models.TaskORM] = []
             if task_ids:
                 task_records = (
                     self.session.execute(
@@ -881,6 +888,10 @@ class PackageBuilder:
                 for record in task_records:
                     record.work_package_id = work_package_key
                     record.force_included = False
+            task_dates = self._collect_task_dates(plan, task_records)
+            if task_dates:
+                plan.period_start_override = task_dates[0]
+                plan.period_end_override = task_dates[-1]
 
             for doc_type in plan.doc_types:
                 templates_map = getattr(self.options, "templates", {}) or {}
@@ -912,6 +923,10 @@ class PackageBuilder:
                     "tasks": [task.jira_id for task in plan.tasks],
                     "source_hash": self.source_hash,
                 }
+                if plan.period_start_override:
+                    document_meta["period_start"] = plan.period_start_override.isoformat()
+                if plan.period_end_override:
+                    document_meta["period_end"] = plan.period_end_override.isoformat()
                 if task_items:
                     document_meta["task_items"] = [dict(item) for item in task_items]
                 if task_ids:
@@ -926,6 +941,8 @@ class PackageBuilder:
                 if "approval" not in document_meta:
                     document_meta["approval"] = {"status": "draft"}
 
+                doc_period_start, doc_period_end = self._plan_period_range(plan)
+
                 document = orm_models.DocumentV2ORM(
                     package_id=self.package.id,
                     ta_id=self.ta.id,
@@ -939,8 +956,8 @@ class PackageBuilder:
                     project_id=plan.project_id,
                     vat_mode=plan.vat_mode.value,
                     currency=plan.currency,
-                    period_start=self.payload.period_start,
-                    period_end=self.payload.period_end,
+                    period_start=doc_period_start,
+                    period_end=doc_period_end,
                     hours=hours,
                     rate_hour=rate_hour,
                     amount_wo_vat=amount_wo_vat,
@@ -1094,10 +1111,11 @@ class PackageBuilder:
         if not items:
             return ["Работы по выбранным задачам отсутствуют."]
 
+        period_start, period_end = self._plan_period_range(plan)
         gpt_options = getattr(self.options, "gpt", None)
         if gpt_options and getattr(gpt_options, "enabled", False):
             payload = SimpleNamespace(
-                period=f"{self.payload.period_start:%d.%m.%Y} — {self.payload.period_end:%d.%m.%Y}",
+                period=f"{period_start:%d.%m.%Y} — {period_end:%d.%m.%Y}",
                 documentType="Акт",
                 gptOptions=SimpleNamespace(
                     enabled=True,
@@ -1370,6 +1388,139 @@ class PackageBuilder:
         )
 
     @staticmethod
+    def _parse_date_value(value: object) -> Optional[date]:
+        if not value:
+            return None
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return value
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, (int, float)):
+            # treat as UNIX timestamp in seconds if reasonable
+            if value > 1e10 or value < 0:
+                return None
+            try:
+                return datetime.fromtimestamp(value).date()
+            except (OverflowError, OSError, ValueError):
+                return None
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            text = text.replace("г.", "").replace("год", "").strip()
+            normalized = text.replace("Z", "+00:00")
+            for candidate in (normalized, text):
+                try:
+                    return datetime.fromisoformat(candidate).date()
+                except ValueError:
+                    try:
+                        return date.fromisoformat(candidate[:10])
+                    except ValueError:
+                        pass
+                match = re.search(r"(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})", candidate)
+                if match:
+                    day, month, year = match.groups()
+                    try:
+                        return date(int(year), int(month), int(day))
+                    except ValueError:
+                        continue
+                match = re.search(r"(\d{1,2})\s+([А-Яа-яЁё]+)\s+(\d{4})", candidate)
+                if match:
+                    day = int(match.group(1))
+                    month_name = match.group(2).lower()
+                    year = int(match.group(3))
+                    month = MONTHS_RU_TO_NUM.get(month_name)
+                    if month:
+                        try:
+                            return date(year, month, day)
+                        except ValueError:
+                            return None
+        if isinstance(value, dict):
+            for nested in value.values():
+                parsed = PackageBuilder._parse_date_value(nested)
+                if parsed:
+                    return parsed
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                parsed = PackageBuilder._parse_date_value(item)
+                if parsed:
+                    return parsed
+        return None
+
+    def _collect_task_dates(
+        self,
+        plan: GroupPlan,
+        task_records: Iterable[orm_models.TaskORM],
+    ) -> List[date]:
+        dates: list[date] = []
+        seen: set[date] = set()
+
+        for record in task_records:
+            updated_at = getattr(record, "updated_at", None)
+            parsed = None
+            if isinstance(updated_at, datetime):
+                parsed = updated_at.date()
+            elif isinstance(updated_at, date):
+                parsed = updated_at
+            if not parsed:
+                created_at = getattr(record, "created_at", None)
+                if isinstance(created_at, datetime):
+                    parsed = created_at.date()
+            if parsed and parsed not in seen:
+                seen.add(parsed)
+                dates.append(parsed)
+
+        meta_date_keys = [
+            "work_date",
+            "workDate",
+            "worklog_date",
+            "worklogDate",
+            "worklog_dates",
+            "worklogDates",
+            "period_start",
+            "periodStart",
+            "period_end",
+            "periodEnd",
+            "start_date",
+            "startDate",
+            "end_date",
+            "endDate",
+            "completed_at",
+            "completedAt",
+            "updated_at",
+            "updatedAt",
+            "date",
+        ]
+
+        for resolved in plan.tasks:
+            meta = resolved.raw_meta or {}
+            if not isinstance(meta, dict):
+                continue
+            for key in meta_date_keys:
+                value = meta.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, (list, tuple, set)):
+                    iterable = value
+                else:
+                    iterable = [value]
+                for item in iterable:
+                    parsed = self._parse_date_value(item)
+                    if parsed and parsed not in seen:
+                        seen.add(parsed)
+                        dates.append(parsed)
+
+        dates.sort()
+        return dates
+
+    def _plan_period_range(self, plan: GroupPlan) -> Tuple[date, date]:
+        start = plan.period_start_override or self.payload.period_start
+        end = plan.period_end_override or self.payload.period_end
+        if start > end:
+            start, end = end, start
+        return (start, end)
+
+    @staticmethod
     def _normalize_order_number(value: object) -> str:
         if not value:
             return ""
@@ -1507,11 +1658,12 @@ class PackageBuilder:
 
                 first_task = plan.tasks[0] if plan.tasks else None
                 task_meta = first_task.raw_meta if first_task else {}
+                doc_period_start, doc_period_end = self._plan_period_range(plan)
 
                 context = {
                     "gptBody": effective_html,
-                    "startPeriodDate": f"{self.payload.period_start:%d.%m.%Y}",
-                    "endPeriodDate": f"{self.payload.period_end:%d.%m.%Y}",
+                    "startPeriodDate": f"{doc_period_start:%d.%m.%Y}",
+                    "endPeriodDate": f"{doc_period_end:%d.%m.%Y}",
                     "totalHours": _format_hours(float(plan.hours)) if plan.hours is not None else "0",
                     "totalAmount": _format_currency(float(plan.amount_total or DECIMAL_ZERO), plan.contract.currency),
                     "totalAmountWithoutVat": _format_currency(float(plan.amount_wo_vat or DECIMAL_ZERO), plan.contract.currency),
@@ -1522,7 +1674,7 @@ class PackageBuilder:
                     "vatAmountWords": _amount_to_words(float(plan.vat_amount or DECIMAL_ZERO)),
                     "projectName": task_meta.get("projectName") or "",
                     "projectKey": task_meta.get("projectKey") or "",
-                    "period": f"{self.payload.period_start:%d.%m.%Y} — {self.payload.period_end:%d.%m.%Y}",
+                    "period": f"{doc_period_start:%d.%m.%Y} — {doc_period_end:%d.%m.%Y}",
                     "docType": doc_type,
                 }
 
@@ -1690,7 +1842,10 @@ class PackageBuilder:
                         context["actNumber"] = str(document.id)
 
                 if not context.get("date"):
-                    context["date"] = self._format_russian_date(self.payload.period_end)
+                    if doc_type in {"APP", "IPR"}:
+                        context["date"] = self._format_russian_date(date.today())
+                    else:
+                        context["date"] = self._format_russian_date(doc_period_end)
 
                 extra = getattr(self.options, "template_variables", None) or {}
                 if isinstance(extra, dict):
@@ -1709,6 +1864,7 @@ class PackageBuilder:
         # Фоллбэк: быстрый DOCX без шаблона
         base_template = (BASE_DIR.parent / "test_renderer.docx")
         docx = DocxDocument(str(base_template)) if base_template.exists() else DocxDocument()
+        doc_period_start, doc_period_end = self._plan_period_range(plan)
         # Удаляем стартовый контент шаблона
         for _ in list(docx.paragraphs):
             p = docx.paragraphs[0]
@@ -1719,7 +1875,7 @@ class PackageBuilder:
         for paragraph in paragraphs:
             docx.add_paragraph(paragraph)
         docx.add_paragraph(
-            f"Период: {self.payload.period_start:%d.%m.%Y} — {self.payload.period_end:%d.%m.%Y}"
+            f"Период: {doc_period_start:%d.%m.%Y} — {doc_period_end:%d.%m.%Y}"
         )
         docx.save(file_path)
         return file_path
