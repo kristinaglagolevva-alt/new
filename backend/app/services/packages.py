@@ -40,6 +40,7 @@ from .documents import (
     _amount_to_words,
     _merge_template_variables,
     _collect_contract_meta_variables,
+    _split_position_authority,
     _v2_work_package_key_from_ids,
     _generate_service_assignment_sections,
 )
@@ -65,6 +66,8 @@ MONTHS_RU_GENITIVE = {
     11: "ноября",
     12: "декабря",
 }
+
+MONTHS_RU_TO_NUM = {name.lower(): index for index, name in MONTHS_RU_GENITIVE.items() if name}
 
 
 def _normalize_inn(inn: Optional[str]) -> Optional[str]:
@@ -101,6 +104,7 @@ class GroupPlan:
     amount_wo_vat: Decimal = DECIMAL_ZERO
     vat_amount: Decimal = DECIMAL_ZERO
     amount_total: Decimal = DECIMAL_ZERO
+    order_details: List[dict[str, str]] = field(default_factory=list)
 
 
 class PackageBuilder:
@@ -748,6 +752,16 @@ class PackageBuilder:
 
         needs_pair = "AVR" in doc_types and any(doc in doc_types for doc in ("APP", "IPR"))
 
+        priority = {
+            "ORDER": 0,
+            "SERVICE_ASSIGN": 1,
+            "AVR": 2,
+            "APP": 3,
+            "IPR": 4,
+            "INVOICE": 5,
+        }
+        doc_types.sort(key=lambda value: priority.get(value, 10))
+
         return doc_types, needs_pair
 
     def _detect_performer_type(self, task: ResolvedTask) -> str:
@@ -1245,6 +1259,217 @@ class PackageBuilder:
             lines.append("<p>Задачи не указаны</p>")
         return "".join(lines)
 
+    def _build_app_tasks_table(self, plan: GroupPlan) -> str:
+        items = self._build_task_items(plan)
+        rows: list[str] = []
+        for item in items:
+            key_raw = (item.get("key") or item.get("id") or "").strip()
+            key_value = key_raw or "—"
+
+            project = (item.get("projectKey") or "").strip()
+            if not project:
+                project_name = (item.get("projectName") or "").strip()
+                if project_name:
+                    project = project_name
+            if not project and key_raw and "-" in key_raw:
+                project = key_raw.split("-", 1)[0]
+            project_value = project or "—"
+
+            summary = (item.get("summary") or "").strip()
+            description = (item.get("description") or "").strip()
+            title_value = summary or description or "—"
+
+            status_text = (item.get("status") or "").strip()
+            status_parts: list[str] = []
+            if status_text:
+                status_parts.append(status_text)
+            hours_value = item.get("hours")
+            if hours_value:
+                status_parts.append(f"Часы: {hours_value}")
+            status_value = " — ".join(status_parts) if status_parts else "—"
+
+            rows.append(
+                "<tr>"
+                f"<td><p style=\"text-align:left; margin:0;\">{escape(key_value)}</p></td>"
+                f"<td><p style=\"text-align:left; margin:0;\">{escape(project_value)}</p></td>"
+                f"<td><p style=\"text-align:left; margin:0;\">{escape(title_value)}</p></td>"
+                f"<td><p style=\"text-align:left; margin:0;\">{escape(status_value)}</p></td>"
+                "</tr>"
+            )
+
+        if not rows:
+            rows.append(
+                "<tr>"
+                "<td><p style=\"text-align:left; margin:0;\">—</p></td>"
+                "<td><p style=\"text-align:left; margin:0;\">—</p></td>"
+                "<td><p style=\"text-align:left; margin:0;\">—</p></td>"
+                "<td><p style=\"text-align:left; margin:0;\">—</p></td>"
+                "</tr>"
+            )
+
+        return "".join(rows)
+
+    def _build_repository_table_rows(self, plan: GroupPlan, context: dict[str, object]) -> str:
+        software_name = str(context.get("softwareName") or context.get("projectName") or context.get("projectKey") or "Программный продукт").strip()
+        if not software_name:
+            software_name = "Программный продукт"
+
+        repo_lines: list[str] = []
+        def _first_nonempty(container: object, *keys: str) -> str:
+            if isinstance(container, dict):
+                for key in keys:
+                    value = container.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+            return ""
+
+        gitlab_server = str(context.get("gitlabServer") or "").strip()
+        if not gitlab_server:
+            extra_template = getattr(self.options, "template_variables", None)
+            if isinstance(extra_template, dict):
+                gitlab_server = str(
+                    extra_template.get("gitlabServer")
+                    or extra_template.get("gitlab_server")
+                    or ""
+                ).strip()
+        first_task_meta = plan.tasks[0].raw_meta if plan.tasks else {}
+        if not gitlab_server:
+            gitlab_server = _first_nonempty(
+                first_task_meta,
+                "gitlabServer",
+                "gitlab_server",
+                "repositoryUrl",
+                "repository_url",
+                "repository",
+            )
+        if not gitlab_server:
+            gitlab_server = "gitlab.company.local/projects/jira-dashboard"
+        repo_lines.append(f"Сервер GitLab: {gitlab_server}")
+
+        dev_server = str(context.get("devServer") or "").strip()
+        if not dev_server:
+            if isinstance(first_task_meta, dict):
+                dev_server = _first_nonempty(first_task_meta, "devServer", "dev_server")
+        if dev_server:
+            repo_lines.append(f"Сервер разработки: {dev_server}")
+
+        additional_repo = _first_nonempty(first_task_meta, "additionalRepository", "additional_repository")
+        if additional_repo:
+            repo_lines.append(additional_repo)
+
+        repo_cell = "".join(
+            f"<p style=\"text-align:left; margin:0;\">{escape(line)}</p>"
+            for line in repo_lines if line.strip()
+        ) or "<p style=\"text-align:left; margin:0;\">—</p>"
+
+        return (
+            "<tr>"
+            f"<td><p style=\"text-align:left; margin:0;\">{escape(software_name)}</p></td>"
+            f"<td>{repo_cell}</td>"
+            "</tr>"
+        )
+
+    @staticmethod
+    def _normalize_order_number(value: object) -> str:
+        if not value:
+            return ""
+        text = str(value).strip()
+        if not text:
+            return ""
+        if text.startswith("№"):
+            text = text[1:].strip()
+        return text
+
+    @staticmethod
+    def _normalize_order_date(value: object) -> str:
+        if not value:
+            return ""
+        text = str(value).strip().strip("«»\"'")
+        if not text:
+            return ""
+        text = text.replace("г.", "").replace("г", "").replace("год", "").strip()
+        regex_numeric = re.search(r"(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})", text)
+        if regex_numeric:
+            day = int(regex_numeric.group(1))
+            month = int(regex_numeric.group(2))
+            year = regex_numeric.group(3)
+            return f"{day:02d}.{month:02d}.{year}"
+        regex_words = re.search(r"(\d{1,2})\s+([А-Яа-яЁё]+)\s+(\d{4})", text)
+        if regex_words:
+            day = int(regex_words.group(1))
+            month_name = regex_words.group(2).lower()
+            month = MONTHS_RU_TO_NUM.get(month_name)
+            if month:
+                return f"{day:02d}.{month:02d}.{regex_words.group(3)}"
+        return text
+
+    def _extract_order_details(self, context: dict[str, object], rendered_content: str | None) -> List[dict[str, str]]:
+        details: List[dict[str, str]] = []
+
+        for idx in range(1, 6):
+            number = self._normalize_order_number(context.get(f"orderNumber{idx}"))
+            date = self._normalize_order_date(context.get(f"orderDate{idx}"))
+            if number or date:
+                details.append({"number": number, "date": date})
+
+        fallback_number = self._normalize_order_number(context.get("orderNumber"))
+        fallback_date = self._normalize_order_date(context.get("orderDate"))
+        if (fallback_number or fallback_date) and not details:
+            details.append({"number": fallback_number, "date": fallback_date})
+
+        if not details and rendered_content:
+            number_match = re.search(r"ПРИКАЗ\s*№\s*([0-9A-Za-z/\-]+)", rendered_content, re.IGNORECASE)
+            date_match = re.search(r"г\.[^<]*?(\d{1,2}\s+[А-Яа-яЁё]+?\s+\d{4})", rendered_content)
+            if not date_match:
+                date_match = re.search(r"(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})", rendered_content)
+            number_value = self._normalize_order_number(number_match.group(1) if number_match else "")
+            date_value = self._normalize_order_date(date_match.group(1) if date_match else "")
+            if number_value or date_value:
+                details.append({"number": number_value, "date": date_value})
+
+        seen = set()
+        unique_details: List[dict[str, str]] = []
+        for item in details:
+            key = (item.get("number", ""), item.get("date", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_details.append(item)
+        return unique_details
+
+    @staticmethod
+    def _append_order_details(plan: GroupPlan, details: List[dict[str, str]]) -> None:
+        if not details:
+            return
+        seen = {(item.get("number", ""), item.get("date", "")) for item in plan.order_details}
+        for detail in details:
+            key = (detail.get("number", ""), detail.get("date", ""))
+            if key in seen:
+                continue
+            plan.order_details.append({"number": detail.get("number", ""), "date": detail.get("date", "")})
+            seen.add(key)
+
+    @staticmethod
+    def _build_order_references_html(details: List[dict[str, str]]) -> str:
+        if not details:
+            return "<ul class=\"doc-list\"><li>Приказ на разработку программного кода не указан.</li></ul>"
+
+        items: List[str] = []
+        for detail in details:
+            number = detail.get("number", "").strip()
+            date = detail.get("date", "").strip()
+            parts = ["Приказу на разработку программного кода (программного обеспечения)"]
+            if number:
+                parts.append(f" № {escape(number)}")
+            if date:
+                parts.append(f" от {escape(date)} г.")
+            if not number and not date:
+                parts.append(" — данные не указаны")
+            parts.append(";")
+            text = "".join(parts)
+            items.append(f"<li>{text}</li>")
+
+        return f"<ul class=\"doc-list\">{''.join(items)}</ul>"
 
     def _render_document_file(
         self,
@@ -1307,6 +1532,21 @@ class PackageBuilder:
                 context["table1"] = table_rows_html
                 context["table2"] = table_rows_html
                 context["tasksTable"] = table_rows_text
+                if doc_type in {"APP", "IPR"}:
+                    app_table_rows = self._build_app_tasks_table(plan)
+                    if app_table_rows:
+                        context["appTasksTable"] = app_table_rows
+                    order_details = plan.order_details if plan.order_details else self._extract_order_details(context, None)
+                    if order_details:
+                        for idx, detail in enumerate(order_details, start=1):
+                            context[f"orderNumber{idx}"] = detail.get("number", "")
+                            context[f"orderDate{idx}"] = detail.get("date", "")
+                        for idx in range(len(order_details) + 1, 6):
+                            context.setdefault(f"orderNumber{idx}", "")
+                            context.setdefault(f"orderDate{idx}", "")
+                        context["orderReferencesList"] = self._build_order_references_html(order_details)
+                    else:
+                        context.setdefault("orderReferencesList", "<ul class=\"doc-list\"><li>Приказ на разработку программного кода не указан.</li></ul>")
 
                 if performer:
                     context["employeeName"] = getattr(performer, "full_name", "") or ""
@@ -1361,6 +1601,12 @@ class PackageBuilder:
                     if legacy_client.kpp:
                         context["companyKpp"] = legacy_client.kpp
                         context["clientKpp"] = legacy_client.kpp
+                    basis_value = (legacy_client.basis or "").strip()
+                    if basis_value and not context.get("seoAuthority"):
+                        position, authority = _split_position_authority(basis_value)
+                        if position and not context.get("seoPosition"):
+                            context["seoPosition"] = position
+                        context["seoAuthority"] = authority or basis_value
 
                 performer_name = (getattr(performer, "full_name", "") or "").strip()
                 if legacy_performer and not performer_name:
@@ -1402,6 +1648,10 @@ class PackageBuilder:
                     for key, value in assignment_sections.items():
                         if value and not context.get(key):
                             context[key] = value
+                if doc_type in {"APP", "IPR"}:
+                    repository_rows = self._build_repository_table_rows(plan, context)
+                    if repository_rows and not context.get("repositoryTableRows"):
+                        context["repositoryTableRows"] = repository_rows
 
                 if not context.get("softwareName"):
                     context["softwareName"] = (
@@ -1448,6 +1698,11 @@ class PackageBuilder:
                         context[str(key)] = str(value)
 
                 content = _render_template_content(template.content, context)
+                if doc_type == "ORDER":
+                    order_details = self._extract_order_details(context, content)
+                    if order_details:
+                        self._append_order_details(plan, order_details)
+                        document.meta.setdefault("order_details", []).extend(order_details)
                 _create_docx_from_text(content, file_path)
                 return file_path
 

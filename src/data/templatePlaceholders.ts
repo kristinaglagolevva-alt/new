@@ -265,6 +265,26 @@ export const TEMPLATE_PLACEHOLDERS: TemplatePlaceholder[] = [
     category: 'Таблицы',
   },
   {
+    key: 'appTasksTable',
+    token: '${appTasksTable}',
+    label: 'Таблица задач (акт передачи прав)',
+    category: 'Таблицы',
+  },
+  {
+    key: 'repositoryTableRows',
+    token: '${repositoryTableRows}',
+    label: 'Таблица репозиториев',
+    category: 'Таблицы',
+    description: 'Список серверов/репозиториев для передачи программного обеспечения.',
+  },
+  {
+    key: 'orderReferencesList',
+    token: '${orderReferencesList}',
+    label: 'Ссылки на приказы',
+    category: 'Таблицы',
+    description: 'Сформированный список приказов с номерами и датами.',
+  },
+  {
     key: 'totalAmountNumeric',
     token: '${totalAmountNumeric}',
     label: 'Сумма цифрами',
