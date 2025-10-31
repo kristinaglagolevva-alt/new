@@ -75,7 +75,8 @@ interface GroupWarning {
     | 'npd-required'
     | 'missing-norm-hours'
     | 'invoice-required'
-    | 'no-hours';
+    | 'no-hours'
+    | 'contract-period-split';
   message: string;
   severity: GroupWarningSeverity;
 }
@@ -202,6 +203,40 @@ const formatIsoDate = (value: Date) => {
   const month = String(value.getMonth() + 1).padStart(2, '0');
   const day = String(value.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+};
+
+const parseLocalDate = (value?: string | null, boundary: 'start' | 'end' = 'start'): Date | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const isoMatch = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(trimmed);
+  let parsed: Date | null = null;
+  if (isoMatch) {
+    const year = Number(isoMatch[1]);
+    const monthIndex = Number(isoMatch[2]) - 1;
+    const day = Number(isoMatch[3]);
+    if (Number.isFinite(year) && Number.isFinite(monthIndex) && Number.isFinite(day)) {
+      parsed = new Date(year, monthIndex, day);
+    }
+  } else {
+    const fallback = new Date(trimmed);
+    if (!Number.isNaN(fallback.getTime())) {
+      parsed = fallback;
+    }
+  }
+  if (!parsed) {
+    return null;
+  }
+  if (boundary === 'start') {
+    parsed.setHours(0, 0, 0, 0);
+  } else {
+    parsed.setHours(23, 59, 59, 999);
+  }
+  return parsed;
 };
 
 const vatSettingsFromLegacyMode = (
@@ -1165,6 +1200,8 @@ export function DocumentGenerationDialog({
       projectName: string | null;
       contractDiagnostics: GroupMatrixEntry['contractDiagnostics'];
     }>();
+    const selectionStartDate = periodRange?.startDate ?? null;
+    const selectionEndDate = periodRange?.endDate ?? null;
 
     selectedTasks.forEach((task) => {
       const performerId = task.contractorId ?? null;
@@ -1274,6 +1311,48 @@ export function DocumentGenerationDialog({
       const legalEntity = contract?.clientId ? legalEntitiesById.get(contract.clientId) ?? null : null;
       const invoiceRequired = Boolean(legalEntity?.requireInvoice);
 
+      const markerTimes: number[] = [];
+      groupTasks.forEach((task) => {
+        const marker = task.completedAt ?? task.startedAt ?? task.updatedAt ?? task.createdAt ?? null;
+        if (!marker) {
+          return;
+        }
+        const timestamp = new Date(marker).getTime();
+        if (Number.isFinite(timestamp)) {
+          markerTimes.push(timestamp);
+        }
+      });
+      const groupPeriodStart = markerTimes.length > 0 ? new Date(Math.min(...markerTimes)) : null;
+      const groupPeriodEnd = markerTimes.length > 0 ? new Date(Math.max(...markerTimes)) : null;
+      const effectiveStartDate = (() => {
+        const candidates: Date[] = [];
+        if (selectionStartDate) {
+          candidates.push(selectionStartDate);
+        }
+        if (groupPeriodStart) {
+          candidates.push(groupPeriodStart);
+        }
+        if (candidates.length === 0) {
+          return null;
+        }
+        return new Date(Math.min(...candidates.map((item) => item.getTime())));
+      })();
+      const effectiveEndDate = (() => {
+        const candidates: Date[] = [];
+        if (selectionEndDate) {
+          candidates.push(selectionEndDate);
+        }
+        if (groupPeriodEnd) {
+          candidates.push(groupPeriodEnd);
+        }
+        if (candidates.length === 0) {
+          return null;
+        }
+        return new Date(Math.max(...candidates.map((item) => item.getTime())));
+      })();
+      const contractValidFromDate = contract ? parseLocalDate(contract.validFrom, 'start') : null;
+      const contractValidToDate = contract ? parseLocalDate(contract.validTo, 'end') : null;
+
       const badges: GroupBadge[] = [];
       if (shouldShowVatBadge(performer, performerType)) {
         const vatBadgeLabel = describeVatSettings(vatSettingsDefault);
@@ -1327,19 +1406,50 @@ export function DocumentGenerationDialog({
         if (contractDiagnostics.candidateContracts.length === 0 && !contractDiagnostics.mismatchedContractId) {
           warnings.push({ type: 'no-contract', message: 'У исполнителя нет подходящего контракта', severity: 'danger' });
         }
-      } else if (contract.validTo) {
-        const validToDate = new Date(contract.validTo);
-        if (!Number.isNaN(validToDate.valueOf())) {
-          if (validToDate.getTime() < now.getTime()) {
-            warnings.push({ type: 'contract-expired', message: `Контракт истёк ${dateFormatter.format(validToDate)}`, severity: 'danger' });
-            badges.push({ id: 'contract-expired', label: `до ${dateFormatter.format(validToDate)}`, tone: 'danger' });
+      } else {
+        const periodLabel = effectiveStartDate && effectiveEndDate
+          ? `${dateFormatter.format(effectiveStartDate)} — ${dateFormatter.format(effectiveEndDate)}`
+          : null;
+        const splitMessages: string[] = [];
+        if (
+          contractValidToDate &&
+          effectiveStartDate &&
+          effectiveEndDate &&
+          contractValidToDate.getTime() >= effectiveStartDate.getTime() &&
+          contractValidToDate.getTime() < effectiveEndDate.getTime()
+        ) {
+          const label = dateFormatter.format(contractValidToDate);
+          splitMessages.push(
+            `${periodLabel ? `Период ${periodLabel}` : 'Выбранный период'} выходит за пределы договора — контракт действует до ${label}. Сформируйте отдельные документы после этой даты.`,
+          );
+        }
+        if (
+          contractValidFromDate &&
+          effectiveStartDate &&
+          effectiveEndDate &&
+          contractValidFromDate.getTime() > effectiveStartDate.getTime() &&
+          contractValidFromDate.getTime() <= effectiveEndDate.getTime()
+        ) {
+          const label = dateFormatter.format(contractValidFromDate);
+          splitMessages.push(
+            `${periodLabel ? `Период ${periodLabel}` : 'Выбранный период'} начинается раньше даты вступления договора (${label}). Документы до этой даты стоит оформить по предыдущему договору.`,
+          );
+        }
+        if (splitMessages.length > 0) {
+          warnings.push({ type: 'contract-period-split', message: splitMessages.join(' '), severity: 'warning' });
+        }
+
+        if (contractValidToDate) {
+          if (contractValidToDate.getTime() < now.getTime()) {
+            warnings.push({ type: 'contract-expired', message: `Контракт истёк ${dateFormatter.format(contractValidToDate)}`, severity: 'danger' });
+            badges.push({ id: 'contract-expired', label: `до ${dateFormatter.format(contractValidToDate)}`, tone: 'danger' });
           } else {
-            const diffDays = Math.round((validToDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+            const diffDays = Math.round((contractValidToDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
             if (contract.expirationReminderEnabled && contract.expirationReminderDays && diffDays <= contract.expirationReminderDays) {
               warnings.push({ type: 'contract-expiring', message: `Контракт истекает через ${diffDays} дн.`, severity: 'warning' });
-              badges.push({ id: 'contract-expiring', label: `до ${dateFormatter.format(validToDate)}`, tone: 'warning' });
+              badges.push({ id: 'contract-expiring', label: `до ${dateFormatter.format(contractValidToDate)}`, tone: 'warning' });
             } else {
-              badges.push({ id: 'contract-valid', label: `до ${dateFormatter.format(validToDate)}`, tone: 'muted' });
+              badges.push({ id: 'contract-valid', label: `до ${dateFormatter.format(contractValidToDate)}`, tone: 'muted' });
             }
           }
         }
@@ -1522,6 +1632,7 @@ export function DocumentGenerationDialog({
     profileMap,
     templates,
     templatesById,
+    periodRange,
   ]);
 
   useEffect(() => {
@@ -1942,6 +2053,7 @@ export function DocumentGenerationDialog({
       include_by_projects: 'auto',
       autopick_contract: true,
       allow_selfemployed_without_receipt: true,
+      respect_period_range: isBulkDocumentsMode,
       templates: templatesOption,
     };
 
@@ -1952,8 +2064,10 @@ export function DocumentGenerationDialog({
     if (useGptNarrative) {
       const periodStartDate = new Date(`${periodStart}T00:00:00`);
       const periodEndDate = new Date(`${periodEnd}T00:00:00`);
-      const startLabel = Number.isNaN(periodStartDate.getTime()) ? periodStart : dateFormatter.format(periodStartDate);
-      const endLabel = Number.isNaN(periodEndDate.getTime()) ? periodEnd : dateFormatter.format(periodEndDate);
+      const periodStartValid = !Number.isNaN(periodStartDate.getTime());
+      const periodEndValid = !Number.isNaN(periodEndDate.getTime());
+      const startLabel = periodStartValid ? dateFormatter.format(periodStartDate) : periodStart;
+      const endLabel = periodEndValid ? dateFormatter.format(periodEndDate) : periodEnd;
       const totalHoursValue = groupSummaries.reduce((sum, summary) => sum + summary.group.totalHours, 0);
       const totalAmountValue = groupSummaries.reduce((sum, summary) => sum + summary.amount, 0);
       const totalTasksCount = groupSummaries.reduce((sum, summary) => sum + summary.group.tasks.length, 0);
@@ -1964,31 +2078,34 @@ export function DocumentGenerationDialog({
         const parsed = new Date(value);
         return Number.isNaN(parsed.getTime()) ? null : parsed;
       };
-      const taskDateBounds = (() => {
-        const dates: Date[] = [];
-        groupSummaries.forEach((summary) => {
-          summary.group.tasks.forEach((task) => {
-            const candidates = [task.completedAt, task.updatedAt, task.startedAt, task.createdAt];
-            for (const candidate of candidates) {
-              const parsed = collectTaskDate(candidate);
-              if (parsed) {
-                dates.push(parsed);
-                break;
-              }
+      const shouldUseTaskBounds = !isBulkDocumentsMode;
+      const taskDateBounds = shouldUseTaskBounds
+        ? (() => {
+            const dates: Date[] = [];
+            groupSummaries.forEach((summary) => {
+              summary.group.tasks.forEach((task) => {
+                const candidates = [task.completedAt, task.updatedAt, task.startedAt, task.createdAt];
+                for (const candidate of candidates) {
+                  const parsed = collectTaskDate(candidate);
+                  if (parsed) {
+                    dates.push(parsed);
+                    break;
+                  }
+                }
+              });
+            });
+            if (dates.length === 0) {
+              return null;
             }
-          });
-        });
-        if (dates.length === 0) {
-          return null;
-        }
-        dates.sort((a, b) => a.getTime() - b.getTime());
-        return {
-          start: dates[0],
-          end: dates[dates.length - 1],
-        };
-      })();
-      const effectiveStart = taskDateBounds?.start ?? (Number.isNaN(periodStartDate.getTime()) ? null : periodStartDate);
-      const effectiveEnd = taskDateBounds?.end ?? (Number.isNaN(periodEndDate.getTime()) ? null : periodEndDate);
+            dates.sort((a, b) => a.getTime() - b.getTime());
+            return {
+              start: dates[0],
+              end: dates[dates.length - 1],
+            };
+          })()
+        : null;
+      const effectiveStart = taskDateBounds?.start ?? (periodStartValid ? periodStartDate : null);
+      const effectiveEnd = taskDateBounds?.end ?? (periodEndValid ? periodEndDate : null);
       const startLabelEffective = effectiveStart ? dateFormatter.format(effectiveStart) : startLabel;
       const endLabelEffective = effectiveEnd ? dateFormatter.format(effectiveEnd) : endLabel;
       const condensedNarrative = (() => {

@@ -138,6 +138,7 @@ export interface Contract {
   expirationReminderDays?: number | null;
   requireIsDocument?: boolean;
   allowedTemplateIds?: string[] | null;
+  continuationOfId?: string | null;
   usageActEnabled?: boolean;
   usageInvoiceEnabled?: boolean;
   usageTaxReportingEnabled?: boolean;
@@ -343,6 +344,7 @@ export interface PackageOptions {
   include_by_projects: 'auto' | 'force' | 'off';
   autopick_contract: boolean;
   allow_selfemployed_without_receipt: boolean;
+  respect_period_range?: boolean;
   gpt?: {
     enabled: boolean;
     language: 'ru' | 'en';

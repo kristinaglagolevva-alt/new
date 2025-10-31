@@ -176,6 +176,7 @@ class ContractBase(BaseModel):
     expirationReminderDays: Optional[int] = Field(default=None, alias="expirationReminderDays")
     requireIsDocument: Optional[bool] = Field(default=None, alias="requireIsDocument")
     allowedTemplateIds: Optional[List[str]] = Field(default=None, alias="allowedTemplateIds")
+    continuationOfId: Optional[str] = Field(default=None, alias="continuationOfId")
     vatSettings: Optional[VatSettings] = Field(default=None, alias="vatSettings")
 
 
@@ -342,6 +343,7 @@ class PackageOptions(BaseModel):
     include_by_projects: Literal["auto", "force", "off"] = "auto"
     autopick_contract: bool = True
     allow_selfemployed_without_receipt: bool = False
+    respect_period_range: bool = False
     gpt: Optional[GptOptions] = None
     template_id: Optional[str] = None
     template_variables: Optional[Dict[str, Any]] = None

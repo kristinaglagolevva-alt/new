@@ -889,7 +889,7 @@ class PackageBuilder:
                     record.work_package_id = work_package_key
                     record.force_included = False
             task_dates = self._collect_task_dates(plan, task_records)
-            if task_dates:
+            if task_dates and not self.options.respect_period_range:
                 plan.period_start_override = task_dates[0]
                 plan.period_end_override = task_dates[-1]
 
@@ -1842,7 +1842,7 @@ class PackageBuilder:
                         context["actNumber"] = str(document.id)
 
                 if not context.get("date"):
-                    if doc_type in {"APP", "IPR"}:
+                    if doc_type in {"APP", "IPR", "AVR"}:
                         context["date"] = self._format_russian_date(date.today())
                     else:
                         context["date"] = self._format_russian_date(doc_period_end)

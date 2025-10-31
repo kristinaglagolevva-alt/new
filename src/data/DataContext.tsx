@@ -1011,6 +1011,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         allowedTemplateIds: Array.isArray((contract as Contract).allowedTemplateIds)
           ? [...((contract as Contract).allowedTemplateIds as string[])]
           : [],
+        continuationOfId: (contract as Contract).continuationOfId ?? null,
         usageActEnabled: (contract as Contract).usageActEnabled ?? false,
         usageInvoiceEnabled: (contract as Contract).usageInvoiceEnabled ?? false,
         usageTaxReportingEnabled: (contract as Contract).usageTaxReportingEnabled ?? false,
@@ -2946,6 +2947,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
               : undefined,
         requireIsDocument: Boolean(contract.requireIsDocument),
         allowedTemplateIds: contract.allowedTemplateIds ?? [],
+        continuationOfId: contract.continuationOfId ?? null,
         usageActEnabled: contract.usageActEnabled ?? false,
         usageInvoiceEnabled: contract.usageInvoiceEnabled ?? false,
         usageTaxReportingEnabled: contract.usageTaxReportingEnabled ?? false,

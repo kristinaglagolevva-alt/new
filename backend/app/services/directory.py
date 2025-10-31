@@ -405,6 +405,7 @@ def _contract_to_schema(entity: orm_models.ContractORM) -> Contract:
     expiration_days_value = extra.get("expiration_reminder_days")
     require_is_document_value = extra.get("require_is_document")
     allowed_templates_value = extra.get("allowed_template_ids")
+    continuation_of_value = extra.get("continuation_of_id")
 
     def _parse_date(value: object) -> date | None:
         if isinstance(value, str) and value:
@@ -422,6 +423,10 @@ def _contract_to_schema(entity: orm_models.ContractORM) -> Contract:
     allowed_templates_list: list[str] | None = None
     if isinstance(allowed_templates_value, list):
         allowed_templates_list = [str(item) for item in allowed_templates_value if isinstance(item, str)]
+
+    continuation_of_id = None
+    if isinstance(continuation_of_value, str) and continuation_of_value:
+        continuation_of_id = continuation_of_value
 
     expiration_enabled_bool = None
     if isinstance(expiration_enabled_value, bool):
@@ -462,6 +467,7 @@ def _contract_to_schema(entity: orm_models.ContractORM) -> Contract:
         expirationReminderDays=expiration_days_int,
         requireIsDocument=require_is_document_bool,
         allowedTemplateIds=allowed_templates_list,
+        continuationOfId=continuation_of_id,
         vatSettings=vat_settings,
     )
 
@@ -575,6 +581,12 @@ def upsert_contract(
             extra["allowed_template_ids"] = [str(item) for item in payload.allowedTemplateIds]
         else:
             extra.pop("allowed_template_ids", None)
+
+    if "continuationOfId" in fields_set:
+        if payload.continuationOfId:
+            extra["continuation_of_id"] = str(payload.continuationOfId)
+        else:
+            extra.pop("continuation_of_id", None)
 
     if "vatSettings" in fields_set:
         if payload.vatSettings is None:

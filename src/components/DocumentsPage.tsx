@@ -608,7 +608,7 @@ export function DocumentsPage({ onNavigate, onDirectoryFocusRequested }: Documen
   const readyTaskIds = useMemo(
     () =>
       tasks
-        .filter((task) => (task.billable || task.forceIncluded) && !task.workPackageId && Math.max(task.hours ?? 0) > 0)
+        .filter((task) => (task.billable || task.forceIncluded) && !task.workPackageId)
         .map((task) => task.id),
     [tasks]
   );
