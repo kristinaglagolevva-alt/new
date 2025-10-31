@@ -1573,7 +1573,7 @@ export function DirectoryPage({ alerts, onSectionViewed, focus, onConsumeFocus }
                 <div>
                   <div className="text-sm font-medium">Согласующий менеджер</div>
                   <div className="text-xs text-muted-foreground">
-                    Отметьте, если этот пользователь согласует документы.
+                    Отметьте, если документы этого пользователя нужно отправлять на согласование.
                   </div>
                 </div>
                 <Switch
